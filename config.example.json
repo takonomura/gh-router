@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "server": {
+    "listen": "127.0.0.1:8080",
+    "caCertificate": "/etc/gh-router/ca.pem",
+    "caPrivateKey": "/etc/gh-router/ca-key.pem"
+  },
+  "github": {
+    "hosts": ["api.github.com", "github.com"]
+  },
+  "routing": {
+    "autoHint": "gh-router-auto",
+    "defaultCredential": "main",
+    "credentialHints": {
+      "gh-router-main": "main",
+      "gh-router-related": "related-read"
+    },
+    "routes": [
+      {"repository": "acme/main", "credential": "main"},
+      {"owner": "acme-related", "credential": "related-read"}
+    ]
+  },
+  "credentials": [
+    {"id": "main", "tokenEnv": "GH_ROUTER_TOKEN_MAIN"},
+    {"id": "related-read", "tokenEnv": "GH_ROUTER_TOKEN_RELATED"}
+  ]
+}

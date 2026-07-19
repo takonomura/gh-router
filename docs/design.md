@@ -88,48 +88,39 @@ credential を選べない場合、または client が未知の token/Cookie �
 
 ## 5. 設定
 
-設定として持つものは、listener/CA、credential、route、任意の default credential に絞る。
+設定として持つものは、listener/CA、credential、route、任意の default credential に絞る。MVP は設定 parser の依存を増やさないため JSON を使用する。
 
-```yaml
-version: 1
-
-server:
-  listen: 0.0.0.0:8080
-  caCertificate: /etc/gh-router/ca.pem
-  caPrivateKey: /etc/gh-router/ca-key.pem
-
-github:
-  hosts:
-    - api.github.com
-    - github.com
-
-routing:
-  # gh を認証済みとして動かすが、credential は指定しない dummy token。
-  autoHint: gh-router-auto
-
-  # route を抽出できない request に使う credential。省略可能。
-  defaultCredential: main
-
-  credentialHints:
-    gh-router-main: main
-    gh-router-acme-related: acme-related-read
-    gh-router-partner: partner-read
-
-  routes:
-    - repository: acme/main
-      credential: main
-    - owner: acme-related
-      credential: acme-related-read
-    - owner: partner
-      credential: partner-read
-
-credentials:
-  - id: main
-    tokenEnv: GH_ROUTER_TOKEN_MAIN
-  - id: acme-related-read
-    tokenEnv: GH_ROUTER_TOKEN_ACME_RELATED
-  - id: partner-read
-    tokenEnv: GH_ROUTER_TOKEN_PARTNER
+```json
+{
+  "version": 1,
+  "server": {
+    "listen": "0.0.0.0:8080",
+    "caCertificate": "/etc/gh-router/ca.pem",
+    "caPrivateKey": "/etc/gh-router/ca-key.pem"
+  },
+  "github": {
+    "hosts": ["api.github.com", "github.com"]
+  },
+  "routing": {
+    "autoHint": "gh-router-auto",
+    "defaultCredential": "main",
+    "credentialHints": {
+      "gh-router-main": "main",
+      "gh-router-acme-related": "acme-related-read",
+      "gh-router-partner": "partner-read"
+    },
+    "routes": [
+      {"repository": "acme/main", "credential": "main"},
+      {"owner": "acme-related", "credential": "acme-related-read"},
+      {"owner": "partner", "credential": "partner-read"}
+    ]
+  },
+  "credentials": [
+    {"id": "main", "tokenEnv": "GH_ROUTER_TOKEN_MAIN"},
+    {"id": "acme-related-read", "tokenEnv": "GH_ROUTER_TOKEN_ACME_RELATED"},
+    {"id": "partner-read", "tokenEnv": "GH_ROUTER_TOKEN_PARTNER"}
+  ]
+}
 ```
 
 `GH_ROUTER_TOKEN_*` は proxy process にだけ渡す。サンドボックスには渡さない。production の設定ファイルへ token value を直接書かない。

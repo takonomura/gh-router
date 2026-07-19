@@ -1,0 +1,202 @@
+package ghrouter
+
+import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
+	"io"
+	"log/slog"
+	"math/big"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+)
+
+func TestProxyCONNECTReplacesAuthorization(t *testing.T) {
+	ca, roots := newTestCA(t)
+	captured := make(chan *http.Request, 1)
+	var upstreamCalls atomic.Int32
+	upstream := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		upstreamCalls.Add(1)
+		captured <- req.Clone(req.Context())
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"text/plain"}, "Set-Cookie": []string{"session=upstream"}},
+			Body:       io.NopCloser(strings.NewReader("ok")),
+			Request:    req,
+		}, nil
+	})
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	proxy := newProxy(testConfig(), ca, upstream, logger, map[string]bool{"api.github.com": true, "github.com": true})
+	proxyServer := httptest.NewServer(proxy.Handler())
+
+	proxyURL, err := url.Parse(proxyServer.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clientTransport := &http.Transport{
+		Proxy: http.ProxyURL(proxyURL),
+		TLSClientConfig: &tls.Config{
+			MinVersion: tls.VersionTLS12,
+			RootCAs:    roots,
+		},
+	}
+	client := &http.Client{Transport: clientTransport}
+	t.Cleanup(func() {
+		clientTransport.CloseIdleConnections()
+		proxyServer.Close()
+	})
+
+	req, err := http.NewRequest(http.MethodGet, "https://api.github.com/repos/acme/main", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "token gh-router-auto")
+	req.Header.Set("X-Forwarded-For", "attacker.example")
+	response, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("client.Do() error = %v", err)
+	}
+	body, err := io.ReadAll(response.Body)
+	response.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusOK || string(body) != "ok" {
+		t.Fatalf("response = %d %q", response.StatusCode, body)
+	}
+	if response.Header.Get("Set-Cookie") != "" {
+		t.Fatal("upstream Set-Cookie was forwarded")
+	}
+
+	upstreamRequest := <-captured
+	if got := upstreamRequest.Header.Get("Authorization"); got != "Bearer main-secret" {
+		t.Fatalf("upstream Authorization = %q", got)
+	}
+	if got := upstreamRequest.Header.Get("X-Forwarded-For"); got != "" {
+		t.Fatalf("upstream X-Forwarded-For = %q", got)
+	}
+
+	attackerRequest, err := http.NewRequest(http.MethodGet, "https://api.github.com/user", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attackerRequest.Header.Set("Authorization", "Bearer github_pat_attacker")
+	attackerResponse, err := client.Do(attackerRequest)
+	if err != nil {
+		t.Fatalf("client.Do(attacker) error = %v", err)
+	}
+	attackerResponse.Body.Close()
+	if attackerResponse.StatusCode != http.StatusForbidden {
+		t.Fatalf("attacker response status = %d", attackerResponse.StatusCode)
+	}
+	if upstreamCalls.Load() != 1 {
+		t.Fatalf("upstream calls = %d, want 1", upstreamCalls.Load())
+	}
+}
+
+func TestProxyRejectsUnsupportedCONNECTHost(t *testing.T) {
+	proxy := &Proxy{hosts: map[string]bool{"api.github.com": true}}
+	req := httptest.NewRequest(http.MethodConnect, "http://evil.example:443", nil)
+	req.Host = "evil.example:443"
+	recorder := httptest.NewRecorder()
+
+	proxy.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusForbidden)
+	}
+}
+
+func TestBuildUpstreamGitRequestUsesBasicAuth(t *testing.T) {
+	req := newRouterRequest(t, http.MethodPost, "/acme/main.git/git-receive-pack", "pack")
+	req.Header.Set("Authorization", "token gh-router-auto")
+	req.Header.Set("Cookie", "must-not-pass=true")
+
+	upstream := buildUpstreamRequest(req, "github.com", "real-token")
+	username, password, ok := upstream.BasicAuth()
+	if !ok || username != "x-access-token" || password != "real-token" {
+		t.Fatalf("BasicAuth() = %q %q %v", username, password, ok)
+	}
+	if upstream.Header.Get("Cookie") != "" {
+		t.Fatal("Cookie was not removed")
+	}
+}
+
+func TestLoadCertificateAuthority(t *testing.T) {
+	testCA, roots := newTestCA(t)
+	directory := t.TempDir()
+	certificatePath := filepath.Join(directory, "ca.pem")
+	privateKeyPath := filepath.Join(directory, "ca-key.pem")
+	privateKeyDER, err := x509.MarshalECPrivateKey(testCA.signer.(*ecdsa.PrivateKey))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(certificatePath, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: testCA.certificate.Raw}), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(privateKeyPath, pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: privateKeyDER}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := loadCertificateAuthority(certificatePath, privateKeyPath)
+	if err != nil {
+		t.Fatalf("loadCertificateAuthority() error = %v", err)
+	}
+	leaf, err := loaded.certificateFor("api.github.com")
+	if err != nil {
+		t.Fatalf("certificateFor() error = %v", err)
+	}
+	if _, err := leaf.Leaf.Verify(x509.VerifyOptions{DNSName: "api.github.com", Roots: roots}); err != nil {
+		t.Fatalf("leaf verification failed: %v", err)
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
+func newTestCA(t *testing.T) (*certificateAuthority, *x509.CertPool) {
+	t.Helper()
+	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	template := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "gh-router test CA"},
+		NotBefore:             now.Add(-time.Minute),
+		NotAfter:              now.Add(time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, privateKey.Public(), privateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	certificate, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatal(err)
+	}
+	roots := x509.NewCertPool()
+	roots.AddCert(certificate)
+	return &certificateAuthority{
+		certificate: certificate,
+		signer:      privateKey,
+		cache:       make(map[string]*tls.Certificate),
+	}, roots
+}
