@@ -298,6 +298,10 @@ func runProxiedCommandResult(t *testing.T, executable string, args, environment 
 	t.Cleanup(proxyServer.Close)
 
 	command := exec.Command(executable, args...)
+	// actions/checkout and developer repositories can add GitHub Authorization
+	// headers to the local Git config. Run outside the checkout so the E2E client
+	// sees only the configuration supplied by this test.
+	command.Dir = t.TempDir()
 	command.Env = append(environment,
 		"SSL_CERT_FILE="+caPath,
 		"GIT_SSL_CAINFO="+caPath,
