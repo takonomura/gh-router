@@ -23,7 +23,6 @@ import (
 )
 
 func TestProxyCONNECTReplacesAuthorization(t *testing.T) {
-	ca, roots := newTestCA(t)
 	captured := make(chan *http.Request, 1)
 	var upstreamCalls atomic.Int32
 	upstream := roundTripFunc(func(req *http.Request) (*http.Response, error) {
@@ -37,8 +36,48 @@ func TestProxyCONNECTReplacesAuthorization(t *testing.T) {
 		}, nil
 	})
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	proxy := newProxy(testConfig(), ca, upstream, logger, map[string]bool{"api.github.com": true, "github.com": true})
+	cfg := testConfig()
+	cfg.GitHub.Hosts = []string{"api.github.com", "github.com"}
+	proxy, err := NewProxy(cfg, logger)
+	if err != nil {
+		t.Fatalf("NewProxy() error = %v", err)
+	}
+	proxy.transport = upstream
 	proxyServer := httptest.NewServer(proxy.Handler())
+
+	bootstrapTransport := &http.Transport{Proxy: nil}
+	bootstrapClient := &http.Client{Transport: bootstrapTransport}
+	caResponse, err := bootstrapClient.Get(proxyServer.URL + caCertificatePath)
+	if err != nil {
+		t.Fatalf("download CA certificate: %v", err)
+	}
+	caPEM, err := io.ReadAll(caResponse.Body)
+	caResponse.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if caResponse.StatusCode != http.StatusOK {
+		t.Fatalf("CA response status = %d", caResponse.StatusCode)
+	}
+	if caResponse.Header.Get("Cache-Control") != "no-store" {
+		t.Fatalf("CA Cache-Control = %q", caResponse.Header.Get("Cache-Control"))
+	}
+	if strings.Contains(string(caPEM), "PRIVATE KEY") {
+		t.Fatal("CA endpoint exposed private key material")
+	}
+	block, rest := pem.Decode(caPEM)
+	if block == nil || block.Type != "CERTIFICATE" || len(rest) != 0 {
+		t.Fatal("CA endpoint did not return exactly one PEM certificate")
+	}
+	certificate, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !certificate.IsCA || certificate.Subject.CommonName != "gh-router ephemeral CA" {
+		t.Fatalf("downloaded certificate is not the generated CA: %s", certificate.Subject)
+	}
+	roots := x509.NewCertPool()
+	roots.AddCert(certificate)
 
 	proxyURL, err := url.Parse(proxyServer.URL)
 	if err != nil {
@@ -53,6 +92,7 @@ func TestProxyCONNECTReplacesAuthorization(t *testing.T) {
 	}
 	client := &http.Client{Transport: clientTransport}
 	t.Cleanup(func() {
+		bootstrapTransport.CloseIdleConnections()
 		clientTransport.CloseIdleConnections()
 		proxyServer.Close()
 	})

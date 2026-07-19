@@ -8,6 +8,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"math/big"
@@ -16,12 +17,52 @@ import (
 	"time"
 )
 
+const ephemeralCAValidity = 24 * time.Hour
+
 type certificateAuthority struct {
 	certificate *x509.Certificate
 	signer      crypto.Signer
 
 	mu    sync.Mutex
 	cache map[string]*tls.Certificate
+}
+
+func generateCertificateAuthority() (*certificateAuthority, error) {
+	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return nil, fmt.Errorf("generate CA key: %w", err)
+	}
+	serial, err := randomSerialNumber()
+	if err != nil {
+		return nil, fmt.Errorf("generate CA serial: %w", err)
+	}
+
+	now := time.Now()
+	template := &x509.Certificate{
+		SerialNumber:          serial,
+		Subject:               pkix.Name{CommonName: "gh-router ephemeral CA"},
+		NotBefore:             now.Add(-5 * time.Minute),
+		NotAfter:              now.Add(ephemeralCAValidity),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		MaxPathLen:            0,
+		MaxPathLenZero:        true,
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, privateKey.Public(), privateKey)
+	if err != nil {
+		return nil, fmt.Errorf("create CA certificate: %w", err)
+	}
+	certificate, err := x509.ParseCertificate(der)
+	if err != nil {
+		return nil, fmt.Errorf("parse generated CA certificate: %w", err)
+	}
+
+	return &certificateAuthority{
+		certificate: certificate,
+		signer:      privateKey,
+		cache:       make(map[string]*tls.Certificate),
+	}, nil
 }
 
 func loadCertificateAuthority(certificatePath, privateKeyPath string) (*certificateAuthority, error) {
@@ -78,6 +119,10 @@ func (ca *certificateAuthority) certificateFor(host string) (*tls.Certificate, e
 	return certificate, nil
 }
 
+func (ca *certificateAuthority) certificatePEM() []byte {
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: ca.certificate.Raw})
+}
+
 func (ca *certificateAuthority) signHost(host string) (*tls.Certificate, error) {
 	now := time.Now()
 	if now.After(ca.certificate.NotAfter) {
@@ -87,7 +132,7 @@ func (ca *certificateAuthority) signHost(host string) (*tls.Certificate, error) 
 	if err != nil {
 		return nil, fmt.Errorf("generate leaf key: %w", err)
 	}
-	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
+	serial, err := randomSerialNumber()
 	if err != nil {
 		return nil, fmt.Errorf("generate leaf serial: %w", err)
 	}
@@ -118,4 +163,17 @@ func (ca *certificateAuthority) signHost(host string) (*tls.Certificate, error) 
 		PrivateKey:  privateKey,
 		Leaf:        leaf,
 	}, nil
+}
+
+func randomSerialNumber() (*big.Int, error) {
+	limit := new(big.Int).Lsh(big.NewInt(1), 128)
+	for {
+		serial, err := rand.Int(rand.Reader, limit)
+		if err != nil {
+			return nil, err
+		}
+		if serial.Sign() > 0 {
+			return serial, nil
+		}
+	}
 }

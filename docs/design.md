@@ -45,6 +45,7 @@ main 以外の owner にも write が必要になった場合は、後述の cre
 
 ### 対応する通信
 
+- proxy 自身の `GET /ca.pem` による公開 CA 証明書の取得
 - `api.github.com` の REST API と GraphQL API
 - `github.com` の Git smart HTTP
 - HTTPS remote を使う `git clone`、`fetch`、`pull`、`push`
@@ -94,9 +95,7 @@ credential を選べない場合、または client が未知の token/Cookie �
 {
   "version": 1,
   "server": {
-    "listen": "0.0.0.0:8080",
-    "caCertificate": "/etc/gh-router/ca.pem",
-    "caPrivateKey": "/etc/gh-router/ca-key.pem"
+    "listen": "0.0.0.0:8080"
   },
   "github": {
     "hosts": ["api.github.com", "github.com"]
@@ -122,6 +121,15 @@ credential を選べない場合、または client が未知の token/Cookie �
   ]
 }
 ```
+
+`server.caCertificate` と `server.caPrivateKey` を両方省略すると、起動時に
+P-256 の CA 鍵と自己署名証明書をメモリ上で生成する。秘密鍵はファイルへ
+書き出さず、公開 CA 証明書だけを proxy listener の `GET /ca.pem` で返す。
+証明書の有効期間は 24 時間で、process を再起動すると新しい CA になる。
+
+外部管理の CA を継続利用する場合は、従来どおり両方の path を指定する。
+片方だけの指定は設定エラーとする。`GET /ca.pem` は生成 CA と外部管理 CA
+のどちらでも、その process が実際に使用している公開 CA 証明書を返す。
 
 `GH_ROUTER_TOKEN_*` は proxy process にだけ渡す。サンドボックスには渡さない。production の設定ファイルへ token value を直接書かない。
 
@@ -205,6 +213,12 @@ Git request に client の認証情報が無くてもよい。repository path �
 サンドボックスでは、薄い wrapper または起動時設定で次を渡す。
 
 ```sh
+mkdir -p /run/gh-router
+curl --fail --silent --show-error \
+  --noproxy '*' \
+  http://gh-router.internal:8080/ca.pem \
+  --output /run/gh-router/ca.pem
+
 export HTTPS_PROXY='http://gh-router.internal:8080'
 export HTTP_PROXY="$HTTPS_PROXY"
 export NO_PROXY=''
@@ -216,6 +230,11 @@ export GH_HOST='github.com'
 export GH_TOKEN='gh-router-auto'
 export GH_PROMPT_DISABLED='1'
 ```
+
+生成 CA を使う場合は proxy の再起動後に必ず証明書を取得し直す。HTTP による
+初期配布自体は相手を認証しないため、proxy の address とそこまでの通信を信頼
+できる隔離 network で使う。これを保証できない環境では、認証済みの配布経路を
+使うか、別の信頼できる経路で証明書を照合する。
 
 通常は `gh-router-auto` のまま利用し、proxy の target extraction と default credential に任せる。対象を抽出できない command で credential を指定する場合も、実 token ではなく hint を使う。
 
@@ -236,6 +255,7 @@ MVP を小さくしても、token の漏洩や持ち込み token の利用に直
 ### TLS と host
 
 - `CONNECT` は設定した GitHub host の port `443` だけ許可する。
+- 平文 HTTP で受け付けるのは proxy 自身の `GET /ca.pem` だけとする。
 - CONNECT authority、TLS SNI、HTTP Host が一致することを確認する。
 - proxy の CA 秘密鍵は proxy 側だけに置き、サンドボックスには公開証明書だけを配布する。
 - GitHub upstream の TLS certificate を通常どおり検証する。

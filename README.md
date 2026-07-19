@@ -29,7 +29,21 @@ To use a `gh` binary outside `PATH`, set `GH_ROUTER_E2E_GH=/path/to/gh`.
 
 ## Setup
 
-Generate a CA used only by the sandbox and this proxy:
+Copy [`config.example.json`](config.example.json), update the routes, and provide the real tokens only to the proxy process:
+
+```sh
+export GH_ROUTER_TOKEN_MAIN='github_pat_...'
+export GH_ROUTER_TOKEN_RELATED='github_pat_...'
+./gh-router -config config.json
+```
+
+When `server.caCertificate` and `server.caPrivateKey` are both omitted, the
+proxy generates an ephemeral CA in memory at startup. Its private key is never
+written to disk or returned over HTTP. The CA is valid for 24 hours and a new
+one is generated on every restart.
+
+To use a persistent externally managed CA instead, set both file paths in the
+configuration after generating one, for example:
 
 ```sh
 openssl req -x509 -newkey rsa:3072 -nodes -days 30 \
@@ -41,21 +55,28 @@ openssl req -x509 -newkey rsa:3072 -nodes -days 30 \
 chmod 600 ca-key.pem
 ```
 
-Copy [`config.example.json`](config.example.json), update the routes and CA paths, then provide the real tokens only to the proxy process:
-
-```sh
-export GH_ROUTER_TOKEN_MAIN='github_pat_...'
-export GH_ROUTER_TOKEN_RELATED='github_pat_...'
-./gh-router -config config.json
+```json
+"server": {
+  "listen": "127.0.0.1:8080",
+  "caCertificate": "/etc/gh-router/ca.pem",
+  "caPrivateKey": "/etc/gh-router/ca-key.pem"
+}
 ```
 
 The token environment variable names are configured in `credentials[].tokenEnv`. Token values are never read from the JSON file.
 
 ## Sandbox environment
 
-Install or mount `ca.pem` in the sandbox, but never expose `ca-key.pem` or the real GitHub tokens. Configure clients as follows:
+Download the public CA certificate from the proxy's HTTP endpoint, then
+configure clients to trust it:
 
 ```sh
+mkdir -p /run/gh-router
+curl --fail --silent --show-error \
+  --noproxy '*' \
+  http://gh-router.internal:8080/ca.pem \
+  --output /run/gh-router/ca.pem
+
 export HTTPS_PROXY='http://gh-router.internal:8080'
 export HTTP_PROXY="$HTTPS_PROXY"
 export NO_PROXY=''
@@ -67,6 +88,13 @@ export GH_HOST='github.com'
 export GH_TOKEN='gh-router-auto'
 export GH_PROMPT_DISABLED='1'
 ```
+
+`GET /ca.pem` uses the proxy listener itself and works for generated and
+file-backed CAs. With an ephemeral CA, download it again after every proxy
+restart. Plain HTTP cannot authenticate the certificate it returns, so this
+bootstrap is intended for an isolated network where the proxy address and
+traffic to it are trusted. Use an authenticated distribution channel or verify
+the certificate out of band when that assumption does not hold.
 
 Use HTTPS Git remotes, for example:
 
@@ -85,6 +113,7 @@ An unknown `Authorization` value, Cookie, URL credential, unsupported host, or n
 
 ## Current scope
 
+- In-memory ephemeral CA generation and `GET /ca.pem`, or a file-backed CA
 - `api.github.com`: REST and GraphQL
 - `github.com`: Git smart HTTP only
 - Static Fine-grained PATs loaded from environment variables

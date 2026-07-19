@@ -90,8 +90,8 @@ func (cfg *Config) validateAndLoadTokens() error {
 	if strings.TrimSpace(cfg.Server.Listen) == "" {
 		return errors.New("config: server.listen is required")
 	}
-	if cfg.Server.CACertificate == "" || cfg.Server.CAPrivateKey == "" {
-		return errors.New("config: server CA certificate and private key are required")
+	if (cfg.Server.CACertificate == "") != (cfg.Server.CAPrivateKey == "") {
+		return errors.New("config: server CA certificate and private key must be specified together")
 	}
 	if strings.TrimSpace(cfg.Routing.AutoHint) == "" {
 		return errors.New("config: routing.autoHint is required")

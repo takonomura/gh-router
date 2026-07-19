@@ -48,6 +48,25 @@ func TestLoadConfig(t *testing.T) {
 	}
 }
 
+func TestLoadConfigAllowsGeneratedCA(t *testing.T) {
+	t.Setenv("TEST_TOKEN", "secret")
+	path := writeTestConfig(t, `{
+  "version": 1,
+  "server": {"listen": "127.0.0.1:8080"},
+  "github": {"hosts": ["api.github.com"]},
+  "routing": {"autoHint": "auto"},
+  "credentials": [{"id": "main", "tokenEnv": "TEST_TOKEN"}]
+}`)
+
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+	if cfg.Server.CACertificate != "" || cfg.Server.CAPrivateKey != "" {
+		t.Fatal("generated CA configuration unexpectedly has file paths")
+	}
+}
+
 func TestLoadConfigRejectsInvalidInput(t *testing.T) {
 	t.Setenv("TEST_TOKEN", "secret")
 
@@ -63,6 +82,17 @@ func TestLoadConfigRejectsInvalidInput(t *testing.T) {
   "unexpected": true
 }`,
 			want: "unknown field",
+		},
+		{
+			name: "only CA certificate path",
+			content: `{
+  "version": 1,
+  "server": {"listen": ":8080", "caCertificate": "ca.pem"},
+  "github": {"hosts": ["api.github.com"]},
+  "routing": {"autoHint": "auto"},
+  "credentials": [{"id": "main", "tokenEnv": "TEST_TOKEN"}]
+}`,
+			want: "must be specified together",
 		},
 		{
 			name: "unknown route credential",

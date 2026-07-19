@@ -16,6 +16,8 @@ import (
 	"time"
 )
 
+const caCertificatePath = "/ca.pem"
+
 type Proxy struct {
 	router    *Router
 	ca        *certificateAuthority
@@ -26,12 +28,22 @@ type Proxy struct {
 }
 
 func NewProxy(cfg *Config, logger *slog.Logger) (*Proxy, error) {
-	ca, err := loadCertificateAuthority(cfg.Server.CACertificate, cfg.Server.CAPrivateKey)
-	if err != nil {
-		return nil, err
-	}
 	if logger == nil {
 		logger = slog.Default()
+	}
+
+	var ca *certificateAuthority
+	var err error
+	if cfg.Server.CACertificate == "" {
+		ca, err = generateCertificateAuthority()
+		if err == nil {
+			logger.Info("ephemeral CA generated", "certificate_path", caCertificatePath, "expires", ca.certificate.NotAfter)
+		}
+	} else {
+		ca, err = loadCertificateAuthority(cfg.Server.CACertificate, cfg.Server.CAPrivateKey)
+	}
+	if err != nil {
+		return nil, err
 	}
 	hosts := make(map[string]bool, len(cfg.GitHub.Hosts))
 	for _, host := range cfg.GitHub.Hosts {
@@ -69,6 +81,14 @@ func (p *Proxy) Handler() http.Handler {
 
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	requestID := p.nextRequestID()
+	if req.URL.Path == caCertificatePath && req.URL.RawQuery == "" {
+		if req.Method != http.MethodGet {
+			p.writeError(w, requestID, http.StatusMethodNotAllowed, "get_required")
+			return
+		}
+		p.serveCACertificate(w, requestID)
+		return
+	}
 	if req.Method != http.MethodConnect {
 		p.writeError(w, requestID, http.StatusMethodNotAllowed, "connect_required")
 		return
@@ -110,6 +130,16 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	}
 
 	p.serveTunnel(clientConn, host, certificate, requestID)
+}
+
+func (p *Proxy) serveCACertificate(w http.ResponseWriter, requestID string) {
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Content-Disposition", `attachment; filename="gh-router-ca.pem"`)
+	w.Header().Set("Content-Type", "application/x-pem-file")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("X-Gh-Router-Request-Id", requestID)
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(p.ca.certificatePEM())
 }
 
 func (p *Proxy) validateConnectAuthority(authority string) (string, error) {

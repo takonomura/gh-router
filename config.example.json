@@ -1,9 +1,7 @@
 {
   "version": 1,
   "server": {
-    "listen": "127.0.0.1:8080",
-    "caCertificate": "/etc/gh-router/ca.pem",
-    "caPrivateKey": "/etc/gh-router/ca-key.pem"
+    "listen": "127.0.0.1:8080"
   },
   "github": {
     "hosts": ["api.github.com", "github.com"]
