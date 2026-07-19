@@ -1,0 +1,30 @@
+name: test
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Check E2E clients
+        run: |
+          gh version
+          git version
+      - name: Test
+        run: go test -race ./...
+        env:
+          GH_ROUTER_REQUIRE_GH_E2E: "1"
+      - name: Vet
+        run: go vet ./...
+      - name: Build
+        run: go build ./cmd/gh-router

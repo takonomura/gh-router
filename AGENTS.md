@@ -19,6 +19,7 @@
 - Re-read `docs/design.md` before expanding behavior.
 - Regularly ask whether code, abstraction, or dependency can be removed without losing an accepted use case.
 - Cover the main routing and credential-isolation paths with tests; add edge-case handling when it protects a realistic security boundary or fixes observed behavior.
+- Run `GH_ROUTER_REQUIRE_GH_E2E=1 go test ./...` when `gh` and `git` are available; these E2E tests use a local fake upstream and require no real token.
 - Keep this file concise. Put detailed protocol or design notes in `docs/` and link them instead of growing this file indefinitely.
 
 ## Repository map

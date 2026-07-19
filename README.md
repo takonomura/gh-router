@@ -13,6 +13,20 @@ go test ./...
 go build -o gh-router ./cmd/gh-router
 ```
 
+The test suite includes command-level E2E tests that run real `gh` and `git`
+processes through a local proxy and a fake GitHub upstream. They verify TLS
+interception, request extraction, credential selection, replacement, and
+rejection without using a GitHub token or contacting GitHub.
+
+`gh` tests are skipped when the binary is unavailable. Require the complete E2E
+suite, as CI does, with:
+
+```sh
+GH_ROUTER_REQUIRE_GH_E2E=1 go test ./...
+```
+
+To use a `gh` binary outside `PATH`, set `GH_ROUTER_E2E_GH=/path/to/gh`.
+
 ## Setup
 
 Generate a CA used only by the sandbox and this proxy:
