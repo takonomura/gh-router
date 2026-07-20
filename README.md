@@ -34,6 +34,7 @@ Copy [`config.example.json`](config.example.json), update the routes, and provid
 ```sh
 export GH_ROUTER_TOKEN_MAIN='github_pat_...'
 export GH_ROUTER_TOKEN_RELATED='github_pat_...'
+export GH_ROUTER_CLIENT_TOKEN='a-separate-random-client-secret'
 ./gh-router -config config.json
 ```
 
@@ -63,7 +64,10 @@ chmod 600 ca-key.pem
 }
 ```
 
-The token environment variable names are configured in `credentials[].tokenEnv`. Token values are never read from the JSON file.
+Real GitHub token environment variable names are configured in
+`credentials[].tokenEnv`. The separate proxy access token is configured in
+`authentication.tokenEnv`; it must not be the same value as any GitHub token.
+Token values are never read from the JSON file.
 
 ## Sandbox environment
 
@@ -85,8 +89,12 @@ export SSL_CERT_FILE='/run/gh-router/ca.pem'
 export GIT_SSL_CAINFO='/run/gh-router/ca.pem'
 
 export GH_HOST='github.com'
-export GH_TOKEN='gh-router-auto'
+export GH_ROUTER_ACCESS_TOKEN='a-separate-random-client-secret'
+export GH_TOKEN="$GH_ROUTER_ACCESS_TOKEN"
 export GH_PROMPT_DISABLED='1'
+
+git config --global http.https://github.com/.extraHeader \
+  "Authorization: Basic $(printf 'x-access-token:%s' "$GH_ROUTER_ACCESS_TOKEN" | base64 | tr -d '\n')"
 ```
 
 `GET /ca.pem` uses the proxy listener itself and works for generated and
@@ -103,13 +111,18 @@ git clone https://github.com/acme/main.git
 gh repo view acme/main
 ```
 
-For a GraphQL operation whose target cannot be inferred, select a configured non-secret hint:
+The proxy access token alone uses automatic routing. For a GraphQL operation
+whose target cannot be inferred, append one of the non-secret hints configured
+in `credentials[].hints`:
 
 ```sh
-GH_TOKEN='gh-router-related' gh api graphql ...
+GH_TOKEN="$GH_ROUTER_ACCESS_TOKEN:related" gh api graphql ...
 ```
 
-An unknown `Authorization` value, Cookie, URL credential, unsupported host, or non-Git request to `github.com` is rejected before a real token is attached.
+Hints select a credential but do not grant access to the proxy. A request must
+always include the correct base proxy access token. An absent or unknown base
+token, unknown hint, Cookie, URL credential, unsupported host, or non-Git
+request to `github.com` is rejected before a real token is attached.
 
 ## Current scope
 
@@ -117,6 +130,7 @@ An unknown `Authorization` value, Cookie, URL credential, unsupported host, or n
 - `api.github.com`: REST and GraphQL
 - `github.com`: Git smart HTTP only
 - Static Fine-grained PATs loaded from environment variables
-- Exact repository routes, owner routes, credential hints, and an optional explicit default
+- Ordered exact-repository and owner routes, with an optional final unconditional route
+- One proxy access token with optional per-credential routing hints
 
 Git SSH, LFS, release/CDN downloads, GitHub Apps, and proxy-side operation policies are not part of the MVP.

@@ -37,7 +37,6 @@ func TestProxyCONNECTReplacesAuthorization(t *testing.T) {
 	})
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	cfg := testConfig()
-	cfg.GitHub.Hosts = []string{"api.github.com", "github.com"}
 	proxy, err := NewProxy(cfg, logger)
 	if err != nil {
 		t.Fatalf("NewProxy() error = %v", err)
@@ -101,7 +100,7 @@ func TestProxyCONNECTReplacesAuthorization(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	req.Header.Set("Authorization", "token gh-router-auto")
+	req.Header.Set("Authorization", "token client-secret")
 	req.Header.Set("X-Forwarded-For", "attacker.example")
 	response, err := client.Do(req)
 	if err != nil {
@@ -137,8 +136,24 @@ func TestProxyCONNECTReplacesAuthorization(t *testing.T) {
 		t.Fatalf("client.Do(attacker) error = %v", err)
 	}
 	attackerResponse.Body.Close()
-	if attackerResponse.StatusCode != http.StatusForbidden {
+	if attackerResponse.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("attacker response status = %d", attackerResponse.StatusCode)
+	}
+	if attackerResponse.Header.Get("WWW-Authenticate") == "" {
+		t.Fatal("authentication rejection did not include WWW-Authenticate")
+	}
+
+	unauthenticatedRequest, err := http.NewRequest(http.MethodGet, "https://api.github.com/user", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unauthenticatedResponse, err := client.Do(unauthenticatedRequest)
+	if err != nil {
+		t.Fatalf("client.Do(unauthenticated) error = %v", err)
+	}
+	unauthenticatedResponse.Body.Close()
+	if unauthenticatedResponse.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated response status = %d", unauthenticatedResponse.StatusCode)
 	}
 	if upstreamCalls.Load() != 1 {
 		t.Fatalf("upstream calls = %d, want 1", upstreamCalls.Load())
@@ -146,7 +161,7 @@ func TestProxyCONNECTReplacesAuthorization(t *testing.T) {
 }
 
 func TestProxyRejectsUnsupportedCONNECTHost(t *testing.T) {
-	proxy := &Proxy{hosts: map[string]bool{"api.github.com": true}}
+	proxy := &Proxy{}
 	req := httptest.NewRequest(http.MethodConnect, "http://evil.example:443", nil)
 	req.Host = "evil.example:443"
 	recorder := httptest.NewRecorder()
@@ -160,7 +175,7 @@ func TestProxyRejectsUnsupportedCONNECTHost(t *testing.T) {
 
 func TestBuildUpstreamGitRequestUsesBasicAuth(t *testing.T) {
 	req := newRouterRequest(t, http.MethodPost, "/acme/main.git/git-receive-pack", "pack")
-	req.Header.Set("Authorization", "token gh-router-auto")
+	req.Header.Set("Authorization", "token client-secret")
 	req.Header.Set("Cookie", "must-not-pass=true")
 
 	upstream := buildUpstreamRequest(req, "github.com", "real-token")

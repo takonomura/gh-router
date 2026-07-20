@@ -27,7 +27,7 @@ func TestRouterSelectsCredential(t *testing.T) {
 			host:       "api.github.com",
 			method:     http.MethodGet,
 			path:       "/repos/acme/main/pulls",
-			auth:       "token gh-router-auto",
+			auth:       "token client-secret",
 			credential: "main",
 			target:     "acme/main",
 		},
@@ -45,17 +45,17 @@ func TestRouterSelectsCredential(t *testing.T) {
 			method:     http.MethodPost,
 			path:       "/graphql",
 			body:       `{"query":"mutation { node(id: \"opaque\") { id } }"}`,
-			auth:       "Bearer gh-router-related",
+			auth:       "Bearer client-secret:related",
 			credential: "related-read",
 			target:     "hint",
 		},
 		{
-			name:       "default route",
+			name:       "unconditional route",
 			host:       "api.github.com",
 			method:     http.MethodGet,
 			path:       "/user",
 			credential: "main",
-			target:     "default",
+			target:     "unconditional",
 		},
 		{
 			name:       "GraphQL variables",
@@ -63,7 +63,7 @@ func TestRouterSelectsCredential(t *testing.T) {
 			method:     http.MethodPost,
 			path:       "/graphql",
 			body:       `{"query":"query($owner:String!,$repo:String!){repository(owner:$owner,name:$repo){id}}","variables":{"owner":"related","repo":"private"}}`,
-			auth:       "token gh-router-auto",
+			auth:       "token client-secret",
 			credential: "related-read",
 			target:     "related/private",
 		},
@@ -89,7 +89,7 @@ func TestRouterSelectsCredential(t *testing.T) {
 			host:       "api.github.com",
 			method:     http.MethodGet,
 			path:       "/user",
-			auth:       "Basic " + base64.StdEncoding.EncodeToString([]byte("x-access-token:gh-router-partner")),
+			auth:       "Basic " + base64.StdEncoding.EncodeToString([]byte("x-access-token:client-secret:partner")),
 			credential: "partner-read",
 			target:     "hint",
 		},
@@ -131,7 +131,15 @@ func TestRouterRejectsUnsafeOrAmbiguousRequests(t *testing.T) {
 			method: http.MethodGet,
 			path:   "/user",
 			auth:   "Bearer github_pat_attacker",
-			code:   "client_credential_rejected",
+			code:   "client_authentication_rejected",
+		},
+		{
+			name:   "unknown credential hint",
+			host:   "api.github.com",
+			method: http.MethodGet,
+			path:   "/user",
+			auth:   "Bearer client-secret:unknown",
+			code:   "unknown_hint",
 		},
 		{
 			name:   "cookie",
@@ -205,7 +213,7 @@ func TestGraphQLBodyIsRestored(t *testing.T) {
 
 func TestRouterRejectsMissingRouteWithoutDefault(t *testing.T) {
 	cfg := testConfig()
-	cfg.Routing.DefaultCredential = ""
+	cfg.Routing.Routes = cfg.Routing.Routes[:len(cfg.Routing.Routes)-1]
 	router := NewRouter(cfg)
 	req := newRouterRequest(t, http.MethodGet, "/user", "")
 
@@ -213,6 +221,37 @@ func TestRouterRejectsMissingRouteWithoutDefault(t *testing.T) {
 	var requestErr *RequestError
 	if !errors.As(err, &requestErr) || requestErr.Code != "route_not_found" {
 		t.Fatalf("Select() error = %v, want route_not_found", err)
+	}
+}
+
+func TestRouterRejectsMissingAuthentication(t *testing.T) {
+	router := NewRouter(testConfig())
+	req := newRouterRequest(t, http.MethodGet, "/user", "")
+	req.Header.Del("Authorization")
+
+	_, err := router.Select(req, "api.github.com")
+	var requestErr *RequestError
+	if !errors.As(err, &requestErr) || requestErr.Status != http.StatusUnauthorized || requestErr.Code != "client_authentication_rejected" {
+		t.Fatalf("Select() error = %v, want unauthorized client_authentication_rejected", err)
+	}
+}
+
+func TestRouterEvaluatesRoutesInOrder(t *testing.T) {
+	cfg := testConfig()
+	cfg.Routing.Routes = []RouteConfig{
+		{When: &RouteCondition{Owner: "acme"}, Credential: "related-read"},
+		{When: &RouteCondition{Repository: "acme/main"}, Credential: "main"},
+		{Credential: "main"},
+	}
+	router := NewRouter(cfg)
+	req := newRouterRequest(t, http.MethodGet, "/repos/acme/main", "")
+
+	selection, err := router.Select(req, "api.github.com")
+	if err != nil {
+		t.Fatalf("Select() error = %v", err)
+	}
+	if selection.CredentialID != "related-read" {
+		t.Fatalf("credential = %q, want first matching owner route", selection.CredentialID)
 	}
 }
 
@@ -226,29 +265,25 @@ func newRouterRequest(t *testing.T, method, path, body string) *http.Request {
 	if err != nil {
 		t.Fatal(err)
 	}
+	req.Header.Set("Authorization", "token client-secret")
 	return req
 }
 
 func testConfig() *Config {
 	return &Config{
+		Authentication: AuthenticationConfig{token: "client-secret"},
 		Routing: RoutingConfig{
-			AutoHint:          "gh-router-auto",
-			DefaultCredential: "main",
-			CredentialHints: map[string]string{
-				"gh-router-main":    "main",
-				"gh-router-related": "related-read",
-				"gh-router-partner": "partner-read",
-			},
 			Routes: []RouteConfig{
-				{Repository: "acme/main", Credential: "main"},
-				{Owner: "related", Credential: "related-read"},
-				{Owner: "partner", Credential: "partner-read"},
+				{When: &RouteCondition{Repository: "acme/main"}, Credential: "main"},
+				{When: &RouteCondition{Owner: "related"}, Credential: "related-read"},
+				{When: &RouteCondition{Owner: "partner"}, Credential: "partner-read"},
+				{Credential: "main"},
 			},
 		},
 		Credentials: []Credential{
-			{ID: "main", token: "main-secret"},
-			{ID: "related-read", token: "related-secret"},
-			{ID: "partner-read", token: "partner-secret"},
+			{ID: "main", Hints: []string{"main"}, token: "main-secret"},
+			{ID: "related-read", Hints: []string{"related", "related-read"}, token: "related-secret"},
+			{ID: "partner-read", Hints: []string{"partner"}, token: "partner-secret"},
 		},
 	}
 }

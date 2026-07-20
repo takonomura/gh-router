@@ -26,12 +26,16 @@ var (
 )
 
 type Router struct {
-	autoHint     string
-	defaultID    string
-	hints        map[string]string
-	repositories map[string]string
-	owners       map[string]string
-	credentials  map[string]runtimeCredential
+	clientToken string
+	hints       map[string]string
+	routes      []runtimeRoute
+	credentials map[string]runtimeCredential
+}
+
+type runtimeRoute struct {
+	repository string
+	owner      string
+	credential string
 }
 
 type runtimeCredential struct {
@@ -60,25 +64,24 @@ func (e *RequestError) Error() string {
 
 func NewRouter(cfg *Config) *Router {
 	router := &Router{
-		autoHint:     cfg.Routing.AutoHint,
-		defaultID:    cfg.Routing.DefaultCredential,
-		hints:        make(map[string]string, len(cfg.Routing.CredentialHints)),
-		repositories: make(map[string]string),
-		owners:       make(map[string]string),
-		credentials:  make(map[string]runtimeCredential, len(cfg.Credentials)),
-	}
-	for hint, credentialID := range cfg.Routing.CredentialHints {
-		router.hints[hint] = credentialID
+		clientToken: cfg.Authentication.token,
+		hints:       make(map[string]string),
+		routes:      make([]runtimeRoute, 0, len(cfg.Routing.Routes)),
+		credentials: make(map[string]runtimeCredential, len(cfg.Credentials)),
 	}
 	for _, route := range cfg.Routing.Routes {
-		if route.Repository != "" {
-			router.repositories[route.Repository] = route.Credential
-		} else {
-			router.owners[route.Owner] = route.Credential
+		runtimeRoute := runtimeRoute{credential: route.Credential}
+		if route.When != nil {
+			runtimeRoute.repository = route.When.Repository
+			runtimeRoute.owner = route.When.Owner
 		}
+		router.routes = append(router.routes, runtimeRoute)
 	}
 	for _, credential := range cfg.Credentials {
 		router.credentials[credential.ID] = runtimeCredential{id: credential.ID, token: credential.token}
+		for _, hint := range credential.Hints {
+			router.hints[hint] = credential.ID
+		}
 	}
 	return router
 }
@@ -88,23 +91,23 @@ func (r *Router) Select(req *http.Request, host string) (Selection, error) {
 		return Selection{}, err
 	}
 
-	hint, automatic, err := r.parseHint(req.Header.Values("Authorization"))
+	credentialID, automatic, err := r.authenticate(req.Header.Values("Authorization"))
 	if err != nil {
 		return Selection{}, err
 	}
 	if !automatic {
-		return r.selection(hint, "hint"), nil
+		return r.selection(credentialID, "hint"), nil
 	}
 
 	var targets []routeTarget
 	switch host {
-	case "api.github.com":
+	case apiGitHubHost:
 		if req.URL.Path == "/graphql" {
 			targets, err = extractGraphQLTargets(req)
 		} else {
 			targets, err = extractRESTTargets(req)
 		}
-	case "github.com":
+	case gitHubHost:
 		var target routeTarget
 		target, err = extractGitTarget(req)
 		if err == nil {
@@ -124,24 +127,25 @@ func (r *Router) Select(req *http.Request, host string) (Selection, error) {
 	return r.selection(credentialID, target), nil
 }
 
-func (r *Router) parseHint(values []string) (credentialID string, automatic bool, err error) {
-	if len(values) == 0 {
-		return "", true, nil
-	}
+func (r *Router) authenticate(values []string) (credentialID string, automatic bool, err error) {
 	if len(values) != 1 {
-		return "", false, newRequestError(http.StatusForbidden, "client_credential_rejected", errors.New("multiple Authorization headers"))
+		return "", false, newRequestError(http.StatusUnauthorized, "client_authentication_rejected", errors.New("exactly one Authorization header is required"))
 	}
 
-	hint, ok := authorizationValue(values[0])
+	value, ok := authorizationValue(values[0])
 	if !ok {
-		return "", false, newRequestError(http.StatusForbidden, "client_credential_rejected", errors.New("unsupported Authorization format"))
+		return "", false, newRequestError(http.StatusUnauthorized, "client_authentication_rejected", errors.New("unsupported Authorization format"))
 	}
-	if hint == r.autoHint {
+	clientToken, hint, hasHint := strings.Cut(value, ":")
+	if !secureTokenEqual(clientToken, r.clientToken) {
+		return "", false, newRequestError(http.StatusUnauthorized, "client_authentication_rejected", errors.New("unknown token"))
+	}
+	if !hasHint {
 		return "", true, nil
 	}
 	credentialID, ok = r.hints[hint]
 	if !ok {
-		return "", false, newRequestError(http.StatusForbidden, "client_credential_rejected", errors.New("unknown token"))
+		return "", false, newRequestError(http.StatusForbidden, "unknown_hint", nil)
 	}
 	return credentialID, false, nil
 }
@@ -189,25 +193,17 @@ func validateClientCredentialCarriers(req *http.Request) error {
 
 func (r *Router) route(targets []routeTarget) (credentialID, target string, err error) {
 	if len(targets) == 0 {
-		if r.defaultID == "" {
+		credentialID := r.routeTarget(routeTarget{})
+		if credentialID == "" {
 			return "", "", newRequestError(http.StatusForbidden, "route_not_found", nil)
 		}
-		return r.defaultID, "default", nil
+		return credentialID, "unconditional", nil
 	}
 
 	candidates := make(map[string]bool)
 	labels := make([]string, 0, len(targets))
 	for _, routeTarget := range targets {
-		candidate := ""
-		if routeTarget.repository != "" {
-			candidate = r.repositories[routeTarget.repository]
-		}
-		if candidate == "" {
-			candidate = r.owners[routeTarget.owner]
-		}
-		if candidate == "" {
-			candidate = r.defaultID
-		}
+		candidate := r.routeTarget(routeTarget)
 		if candidate == "" {
 			return "", "", newRequestError(http.StatusForbidden, "route_not_found", nil)
 		}
@@ -222,6 +218,24 @@ func (r *Router) route(targets []routeTarget) (credentialID, target string, err 
 		return candidate, strings.Join(labels, ","), nil
 	}
 	return "", "", newRequestError(http.StatusForbidden, "route_not_found", nil)
+}
+
+func (r *Router) routeTarget(target routeTarget) string {
+	for _, route := range r.routes {
+		switch {
+		case route.repository != "":
+			if route.repository == target.repository {
+				return route.credential
+			}
+		case route.owner != "":
+			if route.owner == target.owner {
+				return route.credential
+			}
+		default:
+			return route.credential
+		}
+	}
+	return ""
 }
 
 func (r *Router) selection(credentialID, target string) Selection {

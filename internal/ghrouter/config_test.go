@@ -8,6 +8,7 @@ import (
 )
 
 func TestLoadConfig(t *testing.T) {
+	t.Setenv("TEST_CLIENT_TOKEN", "client-secret")
 	t.Setenv("TEST_MAIN_TOKEN", "main-secret")
 	t.Setenv("TEST_READ_TOKEN", "read-secret")
 	path := writeTestConfig(t, `{
@@ -17,19 +18,17 @@ func TestLoadConfig(t *testing.T) {
     "caCertificate": "ca.pem",
     "caPrivateKey": "ca-key.pem"
   },
-  "github": {"hosts": ["API.GITHUB.COM", "github.com"]},
+  "authentication": {"tokenEnv": "TEST_CLIENT_TOKEN"},
   "routing": {
-    "autoHint": "auto",
-    "defaultCredential": "main",
-    "credentialHints": {"use-read": "read"},
     "routes": [
-      {"repository": "Acme/Main", "credential": "main"},
-      {"owner": "Related", "credential": "read"}
+      {"when": {"repository": "Acme/Main"}, "credential": "main"},
+      {"when": {"owner": "Related"}, "credential": "read"},
+      {"credential": "main"}
     ]
   },
   "credentials": [
-    {"id": "main", "tokenEnv": "TEST_MAIN_TOKEN"},
-    {"id": "read", "tokenEnv": "TEST_READ_TOKEN"}
+    {"id": "main", "tokenEnv": "TEST_MAIN_TOKEN", "hints": ["main"]},
+    {"id": "read", "tokenEnv": "TEST_READ_TOKEN", "hints": ["read", "related"]}
   ]
 }`)
 
@@ -37,24 +36,28 @@ func TestLoadConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadConfig() error = %v", err)
 	}
-	if cfg.GitHub.Hosts[0] != "api.github.com" {
-		t.Fatalf("host = %q", cfg.GitHub.Hosts[0])
+	if cfg.Authentication.token != "client-secret" {
+		t.Fatal("proxy access token was not loaded from the environment")
 	}
-	if cfg.Routing.Routes[0].Repository != "acme/main" || cfg.Routing.Routes[1].Owner != "related" {
+	if cfg.Routing.Routes[0].When.Repository != "acme/main" || cfg.Routing.Routes[1].When.Owner != "related" {
 		t.Fatalf("routes were not canonicalized: %#v", cfg.Routing.Routes)
 	}
+	if cfg.Routing.Routes[2].When != nil {
+		t.Fatal("final route is not unconditional")
+	}
 	if cfg.Credentials[0].token != "main-secret" || cfg.Credentials[1].token != "read-secret" {
-		t.Fatal("tokens were not loaded from the environment")
+		t.Fatal("GitHub tokens were not loaded from the environment")
 	}
 }
 
 func TestLoadConfigAllowsGeneratedCA(t *testing.T) {
+	t.Setenv("TEST_CLIENT_TOKEN", "client-secret")
 	t.Setenv("TEST_TOKEN", "secret")
 	path := writeTestConfig(t, `{
   "version": 1,
   "server": {"listen": "127.0.0.1:8080"},
-  "github": {"hosts": ["api.github.com"]},
-  "routing": {"autoHint": "auto"},
+  "authentication": {"tokenEnv": "TEST_CLIENT_TOKEN"},
+  "routing": {"routes": []},
   "credentials": [{"id": "main", "tokenEnv": "TEST_TOKEN"}]
 }`)
 
@@ -68,7 +71,10 @@ func TestLoadConfigAllowsGeneratedCA(t *testing.T) {
 }
 
 func TestLoadConfigRejectsInvalidInput(t *testing.T) {
+	t.Setenv("TEST_CLIENT_TOKEN", "client-secret")
+	t.Setenv("TEST_CLIENT_TOKEN_WITH_COLON", "client:secret")
 	t.Setenv("TEST_TOKEN", "secret")
+	t.Setenv("TEST_OTHER_TOKEN", "other-secret")
 
 	tests := []struct {
 		name    string
@@ -76,10 +82,10 @@ func TestLoadConfigRejectsInvalidInput(t *testing.T) {
 		want    string
 	}{
 		{
-			name: "unknown field",
+			name: "legacy GitHub hosts field",
 			content: `{
   "version": 1,
-  "unexpected": true
+  "github": {"hosts": ["api.github.com"]}
 }`,
 			want: "unknown field",
 		},
@@ -88,8 +94,8 @@ func TestLoadConfigRejectsInvalidInput(t *testing.T) {
 			content: `{
   "version": 1,
   "server": {"listen": ":8080", "caCertificate": "ca.pem"},
-  "github": {"hosts": ["api.github.com"]},
-  "routing": {"autoHint": "auto"},
+  "authentication": {"tokenEnv": "TEST_CLIENT_TOKEN"},
+  "routing": {"routes": []},
   "credentials": [{"id": "main", "tokenEnv": "TEST_TOKEN"}]
 }`,
 			want: "must be specified together",
@@ -98,23 +104,75 @@ func TestLoadConfigRejectsInvalidInput(t *testing.T) {
 			name: "unknown route credential",
 			content: `{
   "version": 1,
-  "server": {"listen": ":8080", "caCertificate": "ca.pem", "caPrivateKey": "key.pem"},
-  "github": {"hosts": ["api.github.com"]},
-  "routing": {"autoHint": "auto", "routes": [{"owner": "acme", "credential": "missing"}]},
+  "server": {"listen": ":8080"},
+  "authentication": {"tokenEnv": "TEST_CLIENT_TOKEN"},
+  "routing": {"routes": [{"when": {"owner": "acme"}, "credential": "missing"}]},
   "credentials": [{"id": "main", "tokenEnv": "TEST_TOKEN"}]
 }`,
 			want: "unknown credential",
 		},
 		{
-			name: "unsupported host",
+			name: "unconditional route is not final",
 			content: `{
   "version": 1,
-  "server": {"listen": ":8080", "caCertificate": "ca.pem", "caPrivateKey": "key.pem"},
-  "github": {"hosts": ["evil.example"]},
-  "routing": {"autoHint": "auto"},
+  "server": {"listen": ":8080"},
+  "authentication": {"tokenEnv": "TEST_CLIENT_TOKEN"},
+  "routing": {"routes": [
+    {"credential": "main"},
+    {"when": {"owner": "acme"}, "credential": "main"}
+  ]},
   "credentials": [{"id": "main", "tokenEnv": "TEST_TOKEN"}]
 }`,
-			want: "not supported",
+			want: "must be the final route",
+		},
+		{
+			name: "route condition has repository and owner",
+			content: `{
+  "version": 1,
+  "server": {"listen": ":8080"},
+  "authentication": {"tokenEnv": "TEST_CLIENT_TOKEN"},
+  "routing": {"routes": [
+    {"when": {"repository": "acme/main", "owner": "acme"}, "credential": "main"}
+  ]},
+  "credentials": [{"id": "main", "tokenEnv": "TEST_TOKEN"}]
+}`,
+			want: "exactly one",
+		},
+		{
+			name: "duplicate credential hint",
+			content: `{
+  "version": 1,
+  "server": {"listen": ":8080"},
+  "authentication": {"tokenEnv": "TEST_CLIENT_TOKEN"},
+  "routing": {"routes": []},
+  "credentials": [
+    {"id": "main", "tokenEnv": "TEST_TOKEN", "hints": ["same"]},
+    {"id": "other", "tokenEnv": "TEST_OTHER_TOKEN", "hints": ["same"]}
+  ]
+}`,
+			want: "duplicate credential hint",
+		},
+		{
+			name: "proxy token contains delimiter",
+			content: `{
+  "version": 1,
+  "server": {"listen": ":8080"},
+  "authentication": {"tokenEnv": "TEST_CLIENT_TOKEN_WITH_COLON"},
+  "routing": {"routes": []},
+  "credentials": [{"id": "main", "tokenEnv": "TEST_TOKEN"}]
+}`,
+			want: "must not contain ':'",
+		},
+		{
+			name: "proxy token equals GitHub token",
+			content: `{
+  "version": 1,
+  "server": {"listen": ":8080"},
+  "authentication": {"tokenEnv": "TEST_CLIENT_TOKEN"},
+  "routing": {"routes": []},
+  "credentials": [{"id": "main", "tokenEnv": "TEST_CLIENT_TOKEN"}]
+}`,
+			want: "must differ from the proxy access token",
 		},
 	}
 

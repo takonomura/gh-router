@@ -18,10 +18,14 @@ import (
 
 const caCertificatePath = "/ca.pem"
 
+const (
+	apiGitHubHost = "api.github.com"
+	gitHubHost    = "github.com"
+)
+
 type Proxy struct {
 	router    *Router
 	ca        *certificateAuthority
-	hosts     map[string]bool
 	transport http.RoundTripper
 	logger    *slog.Logger
 	sequence  atomic.Uint64
@@ -45,11 +49,6 @@ func NewProxy(cfg *Config, logger *slog.Logger) (*Proxy, error) {
 	if err != nil {
 		return nil, err
 	}
-	hosts := make(map[string]bool, len(cfg.GitHub.Hosts))
-	for _, host := range cfg.GitHub.Hosts {
-		hosts[host] = true
-	}
-
 	transport := &http.Transport{
 		Proxy:                 nil,
 		DialContext:           (&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
@@ -62,14 +61,13 @@ func NewProxy(cfg *Config, logger *slog.Logger) (*Proxy, error) {
 		ExpectContinueTimeout: time.Second,
 		TLSClientConfig:       &tls.Config{MinVersion: tls.VersionTLS12},
 	}
-	return newProxy(cfg, ca, transport, logger, hosts), nil
+	return newProxy(cfg, ca, transport, logger), nil
 }
 
-func newProxy(cfg *Config, ca *certificateAuthority, transport http.RoundTripper, logger *slog.Logger, hosts map[string]bool) *Proxy {
+func newProxy(cfg *Config, ca *certificateAuthority, transport http.RoundTripper, logger *slog.Logger) *Proxy {
 	return &Proxy{
 		router:    NewRouter(cfg),
 		ca:        ca,
-		hosts:     hosts,
 		transport: transport,
 		logger:    logger,
 	}
@@ -148,10 +146,14 @@ func (p *Proxy) validateConnectAuthority(authority string) (string, error) {
 		return "", newRequestError(http.StatusForbidden, "host_denied", errors.New("CONNECT requires an allowed host on port 443"))
 	}
 	host = strings.ToLower(host)
-	if !p.hosts[host] {
+	if !isSupportedGitHubHost(host) {
 		return "", newRequestError(http.StatusForbidden, "host_denied", nil)
 	}
 	return host, nil
+}
+
+func isSupportedGitHubHost(host string) bool {
+	return host == apiGitHubHost || host == gitHubHost
 }
 
 func (p *Proxy) serveTunnel(clientConn net.Conn, host string, certificate *tls.Certificate, connectRequestID string) {
@@ -212,6 +214,9 @@ func (p *Proxy) handleGitHubRequest(w http.ResponseWriter, req *http.Request, co
 			"method", req.Method,
 			"code", requestErr.Code,
 		)
+		if requestErr.Status == http.StatusUnauthorized {
+			w.Header().Set("WWW-Authenticate", `Basic realm="gh-router"`)
+		}
 		p.writeError(w, requestID, requestErr.Status, requestErr.Code)
 		return
 	}
@@ -277,7 +282,7 @@ func buildUpstreamRequest(req *http.Request, host, token string) *http.Request {
 	} {
 		upstreamRequest.Header.Del(header)
 	}
-	if host == "api.github.com" {
+	if host == apiGitHubHost {
 		upstreamRequest.Header.Set("Authorization", "Bearer "+token)
 	} else {
 		upstreamRequest.SetBasicAuth("x-access-token", token)

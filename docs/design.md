@@ -2,7 +2,7 @@
 
 - Status: Draft
 - 対象: GitHub.com
-- 最終更新: 2026-07-19
+- 最終更新: 2026-07-20
 
 ## 1. 概要
 
@@ -37,7 +37,7 @@ MVP は次の環境を対象とする。
 | `acme/main` | `main` | 対象 repository、必要な permissions は write |
 | `acme-related/*` | `acme-related-read` | 必要な private repositories、permissions は read-only |
 | `partner/*` | `partner-read` | 必要な private repositories、permissions は read-only |
-| その他の public repository | 明示された default credential | GitHub が全 Fine-grained PAT に与える public read |
+| その他の public repository | 末尾の条件なし route が選ぶ credential | GitHub が全 Fine-grained PAT に与える public read |
 
 main 以外の owner にも write が必要になった場合は、後述の credential hint を明示することで対応できる。ただし MVP の主要シナリオは「main のみ write、他 owner は read」とする。
 
@@ -71,7 +71,7 @@ REST/GraphQL endpoint ごとの allowlist は作らない。選択された toke
 
 ```mermaid
 flowchart LR
-    C[Sandbox<br/>gh / git] -->|HTTPS Proxy + dummy token| P[gh-router<br/>TLS termination]
+    C[Sandbox<br/>gh / git] -->|HTTPS Proxy + access token<br/>+ optional hint| P[gh-router<br/>TLS termination]
     P --> R[Route selection<br/>Authorization replacement]
     R -->|real token| G[GitHub]
     T[Fine-grained PATs] --> R
@@ -80,8 +80,8 @@ flowchart LR
 proxy は一つの process とし、MVP では内部 component を細かく分割しない。request ごとに次だけを行う。
 
 1. 接続先が許可した GitHub host であることを確認する。
-2. client の `Authorization` が既知の dummy token、または未指定であることを確認する。
-3. credential hint または request の owner/repository から credential を一つ選ぶ。
+2. client の `Authorization` に正しい proxy access token が含まれることを確認する。
+3. 任意の credential hint または request の owner/repository から credential を一つ選ぶ。
 4. client の認証情報を破棄し、選択した実 token で `Authorization` を作り直す。
 5. GitHub へ request を一度だけ転送する。
 
@@ -89,7 +89,7 @@ credential を選べない場合、または client が未知の token/Cookie �
 
 ## 5. 設定
 
-設定として持つものは、listener/CA、credential、route、任意の default credential に絞る。MVP は設定 parser の依存を増やさないため JSON を使用する。
+設定として持つものは、listener/CA、proxy authentication、credential、route に絞る。対応 host は `api.github.com` と `github.com` に実装上固定し、設定には重複して持たせない。MVP は設定 parser の依存を増やさないため JSON を使用する。
 
 ```json
 {
@@ -97,27 +97,21 @@ credential を選べない場合、または client が未知の token/Cookie �
   "server": {
     "listen": "0.0.0.0:8080"
   },
-  "github": {
-    "hosts": ["api.github.com", "github.com"]
+  "authentication": {
+    "tokenEnv": "GH_ROUTER_CLIENT_TOKEN"
   },
   "routing": {
-    "autoHint": "gh-router-auto",
-    "defaultCredential": "main",
-    "credentialHints": {
-      "gh-router-main": "main",
-      "gh-router-acme-related": "acme-related-read",
-      "gh-router-partner": "partner-read"
-    },
     "routes": [
-      {"repository": "acme/main", "credential": "main"},
-      {"owner": "acme-related", "credential": "acme-related-read"},
-      {"owner": "partner", "credential": "partner-read"}
+      {"when": {"repository": "acme/main"}, "credential": "main"},
+      {"when": {"owner": "acme-related"}, "credential": "acme-related-read"},
+      {"when": {"owner": "partner"}, "credential": "partner-read"},
+      {"credential": "main"}
     ]
   },
   "credentials": [
-    {"id": "main", "tokenEnv": "GH_ROUTER_TOKEN_MAIN"},
-    {"id": "acme-related-read", "tokenEnv": "GH_ROUTER_TOKEN_ACME_RELATED"},
-    {"id": "partner-read", "tokenEnv": "GH_ROUTER_TOKEN_PARTNER"}
+    {"id": "main", "tokenEnv": "GH_ROUTER_TOKEN_MAIN", "hints": ["main"]},
+    {"id": "acme-related-read", "tokenEnv": "GH_ROUTER_TOKEN_ACME_RELATED", "hints": ["acme-related"]},
+    {"id": "partner-read", "tokenEnv": "GH_ROUTER_TOKEN_PARTNER", "hints": ["partner"]}
   ]
 }
 ```
@@ -133,13 +127,14 @@ P-256 の CA 鍵と自己署名証明書をメモリ上で生成する。秘密�
 
 `GH_ROUTER_TOKEN_*` は proxy process にだけ渡す。サンドボックスには渡さない。production の設定ファイルへ token value を直接書かない。
 
-`autoHint` と `credentialHints` の値は GitHub credential ではなく、client が変更できる routing hint である。hint の秘匿性には依存しない。どの hint を選んでも、GitHub で実行できる範囲は対応する Fine-grained PAT の scope を超えない。
+`authentication.tokenEnv` が指す値は GitHub credential とは別の proxy access token であり、proxy process と利用を許可する sandbox の双方に渡す。token 単体は自動 routing、`token:hint` は明示 routing として解釈する。`credentials[].hints` は秘匿情報ではなく、hint を持たない credential は明示選択できない。どの hint を選んでも、GitHub で実行できる範囲は対応する Fine-grained PAT の scope を超えない。
 
 ### 設定時の確認
 
-- credential ID、hint、exact repository route は重複させない。
-- 一つの owner に複数の owner route を定義しない。
-- route が参照する credential と `defaultCredential` が存在することを起動時に確認する。
+- proxy access token は空、前後空白、`:` を許可せず、実 GitHub token と同じ値にしない。
+- credential ID、hint、exact repository route、owner route は重複させない。
+- route が参照する credential が存在することを起動時に確認する。
+- 条件なし route は省略可能とし、定義する場合は一つだけ末尾に置く。
 - main token は main repository だけを選択し、必要最小限の write permissions にする。
 - related owner の token は必要な repository だけを選択し、read-only permissions にする。
 - token には有効期限を設定し、rotation はまず手動運用とする。
@@ -152,19 +147,22 @@ route の定義は token scope と一致させるが、MVP では GitHub API を
 
 credential は次の順で決める。
 
-1. `Authorization` に既知の credential hint があれば、その credential を選ぶ。
-2. neutral な `autoHint` または認証情報なしの場合は、request から owner/repository を抽出する。
-3. exact repository route、owner route の順で探す。
-4. route が無ければ、設定された `defaultCredential` を選ぶ。
-5. default も無ければ `route_not_found` として拒否する。
+1. `Authorization` の Bearer/token 値または Basic password から proxy access token と任意の `:hint` を読む。
+2. access token が無い、不正、または一致しなければ upstream へ送らず拒否する。
+3. 既知の hint があれば対応する credential を選ぶ。未知の hint は拒否する。
+4. hint が無ければ request から owner/repository を抽出する。
+5. target ごとに route を上から評価し、最初に一致した route の credential を選ぶ。
+6. 一致する route が無ければ `route_not_found` として拒否する。
 
 credential hint は抽出結果より優先する。hint と実際の対象が合っていなくても proxy は独自認可を行わず、その token で GitHub へ送る。対象が token scope 外なら GitHub が拒否する。
 
-抽出結果が複数 credential を指して一意に決まらない場合は、default を使わず `ambiguous_route` として拒否する。必要なら credential hint で明示する。
+route の `when.repository` は exact repository、`when.owner` は owner に一致する。条件の無い末尾 route はすべての target に一致し、target を抽出できない request にも使われる。repository と owner の優先順位は暗黙に持たず、設定上の順序で表す。
+
+抽出結果が複数 credential を指して一意に決まらない場合は、条件なし route へまとめず `ambiguous_route` として拒否する。必要なら credential hint で明示する。
 
 一度選択した token で `401`、`403`、`404` になっても別 token は試さない。特に mutation や Git push を自動 retry しない。
 
-owner/repository 名は GitHub の扱いに合わせて case-insensitive に比較し、route lookup では lowercase の canonical form を使う。path の decode や `.git` suffix の除去に失敗した request は default へ流さず拒否する。
+owner/repository 名は GitHub の扱いに合わせて case-insensitive に比較し、route lookup では lowercase の canonical form を使う。path の decode や `.git` suffix の除去に失敗した request は条件なし route へ流さず拒否する。
 
 ### 6.2. REST API
 
@@ -176,7 +174,7 @@ REST API では、代表的な path から routing target を抽出する。
 | `/orgs/{owner}/...` | owner |
 | `/users/{owner}/...` | owner |
 
-`/user`、`/search/...`、numeric ID だけの endpoint など、owner/repository を抽出できない request は `defaultCredential` または credential hint を使う。
+`/user`、`/search/...`、numeric ID だけの endpoint など、owner/repository を抽出できない request は条件なし route または credential hint を使う。
 
 REST operation の read/write 分類や body の解釈は行わない。たとえば repository 作成や transfer が許可されるかは、選択された token の permissions に依存する。
 
@@ -190,7 +188,7 @@ GraphQL は URL が常に `/graphql` であるため、MVP では JSON body か�
 
 GraphQL document 全体の意味や query/mutation の認可は行わない。通常の `gh` command で観測した形式だけを小さな extractor として追加する。
 
-node ID しか含まない mutation など、対象を抽出できない request は明示された `defaultCredential` を使う。default を使いたくない場合や別 owner の token が必要な場合は credential hint を指定する。
+node ID しか含まない mutation など、対象を抽出できない request は条件なし route を使う。別 owner の token が必要な場合は credential hint を指定する。条件なし route が無ければ拒否する。
 
 一つの request に異なる credential route の対象が混在し、hint も無い場合は拒否する。一つの GraphQL request に複数 token を付けたり、query を分割・再実行したりはしない。
 
@@ -206,7 +204,7 @@ Git smart HTTP は次の path から repository を抽出する。
 
 read/write の独自判定はせず、upload-pack と receive-pack のどちらにも選択された token を付ける。read-only token で push した場合は GitHub が拒否する。
 
-Git request に client の認証情報が無くてもよい。repository path から route を選び、API では Bearer、Git では Basic auth として実 token を付与する。
+Git request も proxy access token を `Authorization` に先行送信する必要がある。repository path から route を選び、API では Bearer、Git では Basic auth として実 token を付与する。
 
 ## 7. Client setup
 
@@ -227,8 +225,12 @@ export SSL_CERT_FILE='/run/gh-router/ca.pem'
 export GIT_SSL_CAINFO='/run/gh-router/ca.pem'
 
 export GH_HOST='github.com'
-export GH_TOKEN='gh-router-auto'
+export GH_ROUTER_ACCESS_TOKEN='proxy-access-token-from-a-secret-channel'
+export GH_TOKEN="$GH_ROUTER_ACCESS_TOKEN"
 export GH_PROMPT_DISABLED='1'
+
+git config --global http.https://github.com/.extraHeader \
+  "Authorization: Basic $(printf 'x-access-token:%s' "$GH_ROUTER_ACCESS_TOKEN" | base64 | tr -d '\n')"
 ```
 
 生成 CA を使う場合は proxy の再起動後に必ず証明書を取得し直す。HTTP による
@@ -236,17 +238,17 @@ export GH_PROMPT_DISABLED='1'
 できる隔離 network で使う。これを保証できない環境では、認証済みの配布経路を
 使うか、別の信頼できる経路で証明書を照合する。
 
-通常は `gh-router-auto` のまま利用し、proxy の target extraction と default credential に任せる。対象を抽出できない command で credential を指定する場合も、実 token ではなく hint を使う。
+通常は proxy access token だけを送り、target extraction と ordered route に任せる。対象を抽出できない command で credential を指定する場合は、実 token ではなく access token に hint を付ける。
 
 ```sh
-GH_TOKEN='gh-router-partner' gh api graphql ...
+GH_TOKEN="$GH_ROUTER_ACCESS_TOKEN:partner" gh api graphql ...
 ```
 
 hint を選ぶ操作は通常の利用では不要にし、実践投入で extractor が対応できなかった command の回避策として残す。後でその command の routing pattern を proxy に追加できる。
 
 Git remote は `https://github.com/OWNER/REPO.git` に統一する。SSH remote を使う既存 repository は、sandbox 構築時に HTTPS へ変換する。
 
-`gh auth token` が返すのは dummy token であり、実 token ではない。これは期待する挙動である。
+`gh auth token` が返すのは proxy access token と任意の hint であり、実 GitHub token ではない。これは期待する挙動である。
 
 ## 8. MVP に含める安全策
 
@@ -254,7 +256,7 @@ MVP を小さくしても、token の漏洩や持ち込み token の利用に直
 
 ### TLS と host
 
-- `CONNECT` は設定した GitHub host の port `443` だけ許可する。
+- `CONNECT` は実装が対応する GitHub host の port `443` だけ許可する。
 - 平文 HTTP で受け付けるのは proxy 自身の `GET /ca.pem` だけとする。
 - CONNECT authority、TLS SNI、HTTP Host が一致することを確認する。
 - proxy の CA 秘密鍵は proxy 側だけに置き、サンドボックスには公開証明書だけを配布する。
@@ -263,14 +265,15 @@ MVP を小さくしても、token の漏洩や持ち込み token の利用に直
 - `github.com` では対応する smart HTTP path 以外を拒否し、browser/web request として転送しない。
 - redirect は proxy 内で自動追跡しない。MVP の host allowlist 外へ移る処理は失敗させる。
 
-### Client credential
+### Client authentication と credential isolation
 
-- client の `Authorization` は、未指定、`autoHint`、既知の credential hint だけ許可する。
-- `Bearer`/`token` 形式と、Git client が使う Basic auth の password 部分から dummy hint を認識する。
+- client の `Authorization` は必須とし、正しい proxy access token 単体または `token:hint` だけ許可する。
+- `Bearer`/`token` 形式と、Git client が使う Basic auth の password 部分から同じ値を認識する。
+- proxy access token は定時間比較し、実 GitHub token と同じ値の設定は起動時に拒否する。
 - それ以外の `Authorization`、Cookie、URL userinfo、`access_token`/`client_secret` query parameter は拒否し、単に上書きして転送しない。
 - upstream request の `Authorization` は client header を編集するのではなく、選択した token から作り直す。
 
-これにより、侵入者が自分の PAT を設定して自分の repository へ write することを防ぐ。侵入者が既知の hint を選ぶことはできるが、得られるのは設定済み PAT の scope だけである。attacker owner の public repository では public read しか持たないため、write は GitHub に拒否される。
+これにより、proxy access token を持たない client の利用と、侵入者が自分の PAT を設定して自分の repository へ write することを防ぐ。認証済み client が既知の hint を選んでも、得られるのは設定済み PAT の scope だけである。attacker owner の public repository では public read しか持たないため、write は GitHub に拒否される。
 
 ### Secret と log
 
@@ -283,7 +286,8 @@ MVP を小さくしても、token の漏洩や持ち込み token の利用に直
 
 - route は認可ではない。token scope が設定ミスで広ければ、その範囲は利用できてしまう。
 - 許可された main repository へ secret を commit、Issue、PR comment として書くことは防がない。
-- proxy を利用できる全 sandbox は、全 credential hint を選べるものとして token scope を設計する。
+- proxy access token を持つ全 sandbox は、設定された全 credential hint を選べるものとして token scope を設計する。
+- proxy authentication は TLS 内側の request で行うため、CONNECT と TLS handshake 自体は認証より先に成立する。認証前の request に実 token を付けたり upstream へ転送したりはしないが、network-level の DoS 対策にはならない。
 - request smuggling 対策、詳細な parser fuzzing、DLP などを独自実装するものではない。まず成熟した HTTP/TLS library を使い、公開範囲は隔離環境に限定する。
 - proxy を経由しない GitHub/外部ネットワークへの通信は、別の egress 制御で遮断する必要がある。
 
@@ -301,12 +305,12 @@ MVP を小さくしても、token の漏洩や持ち込み token の利用に直
 6. route の無い public OSS repository を clone し、`gh repo view` で参照できる。
 7. 対象を抽出できない GraphQL operation を credential hint で正しい token へ送れる。
 8. client が独自 PAT、Cookie、URL userinfo を送ると、GitHub へ到達する前に拒否される。
-9. attacker 管理 repository への write は、auto/default/各 hint のどれを使っても失敗する。
+9. attacker 管理 repository への write は、自動 route、条件なし route、各 hint のどれを使っても失敗する。
 
 ### 実装時の test
 
-- exact repository route が owner route より優先されること。
-- credential hint、auto extraction、default、reject の順序が固定されていること。
+- route が設定順に評価され、先に置いた exact repository route が owner route より優先されること。
+- proxy authentication、credential hint、target extraction、ordered route、reject の順序が固定されていること。
 - GraphQL で複数 route が見つかった場合に拒否すること。
 - fake upstream で client の token/Cookie が一 byte も転送されないこと。
 - credential ごとに期待した Bearer/Basic header が付くこと。
@@ -314,7 +318,7 @@ MVP を小さくしても、token の漏洩や持ち込み token の利用に直
 - allowlist 外 host、CONNECT/SNI/Host 不一致を拒否すること。
 - access log と error に token が含まれないこと。
 
-投入後は `route_not_found`、`ambiguous_route`、default 使用回数と失敗した command を記録する。実際に必要になった pattern だけ extractor または route に追加する。
+投入後は `route_not_found`、`ambiguous_route`、条件なし route の使用回数と失敗した command を記録する。実際に必要になった pattern だけ extractor または route に追加する。
 
 ## 10. 将来の方向性
 
@@ -323,12 +327,12 @@ MVP の運用結果を基に、必要なものを個別に追加する。
 - **Routing 改善**: よく使う REST path、GraphQL variables/literal、numeric/node ID の resolver を増やす。
 - **Proxy policy**: token scope だけでは広すぎることが確認された操作に、repository/action 単位の deny/allow を追加する。
 - **Credential provider**: GitHub App installation token、短命 token、secret store、rotation 自動化へ対応する。
-- **Shared proxy**: 異なる権限の sandbox を同じ instance で扱う必要が出た場合に、client authentication と profile を追加する。
+- **Shared proxy**: 異なる権限の sandbox を同じ instance で扱う必要が出た場合に、複数の client credential と profile を追加する。
 - **追加 protocol/host**: Git LFS、release asset、raw/codeload、Packages へ必要な範囲で対応する。
 - **運用機能**: metrics、alert、config reload、HA、より強い parser validation を利用規模に合わせて追加する。
 - **互換性管理**: 利用する `gh` version と command matrix を CI で継続確認する。
 
-最終的に細かな proxy policy が必要になっても、MVP の `credential hint -> target extraction -> explicit default` という routing は credential 選択の仕組みとして残せる。policy は routing の前段に一度に作るのではなく、token scope だけでは防げない具体的な操作が見つかった時点で追加する。
+最終的に routing 条件や proxy policy が増えても、MVP の ordered first-match と末尾の条件なし route の意味は維持する。新しい条件は `when` の中へ追加し、policy は token scope だけでは防げない具体的な操作が見つかった時点で追加する。
 
 ## 11. 参考資料
 

@@ -43,7 +43,7 @@ func TestGHCommandRoutingE2E(t *testing.T) {
 			wantRepository: "related/library",
 		},
 		{
-			name:           "default route",
+			name:           "unconditional route",
 			repository:     "public/example",
 			response:       `{"data":{"repository":{"nameWithOwner":"public/example"}}}`,
 			wantOutput:     "public/example",
@@ -54,7 +54,7 @@ func TestGHCommandRoutingE2E(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			observed := runGHCommand(t, gh, "gh-router-auto", test.response,
+			observed := runGHCommand(t, gh, "client-secret", test.response,
 				"repo", "view", test.repository, "--json", "nameWithOwner", "--jq", ".nameWithOwner")
 
 			if got := strings.TrimSpace(observed.output); got != test.wantOutput {
@@ -80,7 +80,7 @@ func TestGHCommandRoutingE2E(t *testing.T) {
 	}
 
 	t.Run("pr list uses owner route", func(t *testing.T) {
-		observed := runGHCommand(t, gh, "gh-router-auto", `{"data":{"repository":{"pullRequests":{"nodes":[]}}}}`,
+		observed := runGHCommand(t, gh, "client-secret", `{"data":{"repository":{"pullRequests":{"nodes":[]}}}}`,
 			"pr", "list", "--repo", "related/library", "--limit", "1", "--json", "number")
 		if got := strings.TrimSpace(observed.output); got != "[]" {
 			t.Fatalf("gh output = %q", got)
@@ -89,7 +89,7 @@ func TestGHCommandRoutingE2E(t *testing.T) {
 	})
 
 	t.Run("issue list uses exact route", func(t *testing.T) {
-		observed := runGHCommand(t, gh, "gh-router-auto", `{"data":{"repository":{"hasIssuesEnabled":true,"issues":{"nodes":[]}}}}`,
+		observed := runGHCommand(t, gh, "client-secret", `{"data":{"repository":{"hasIssuesEnabled":true,"issues":{"nodes":[]}}}}`,
 			"issue", "list", "--repo", "acme/main", "--limit", "1", "--json", "number")
 		if got := strings.TrimSpace(observed.output); got != "[]" {
 			t.Fatalf("gh output = %q", got)
@@ -108,12 +108,12 @@ func TestGHAPICommandRoutingE2E(t *testing.T) {
 	}{
 		{name: "REST exact route", repository: "acme/main", token: "main-secret"},
 		{name: "REST owner route", repository: "related/library", token: "related-secret"},
-		{name: "REST default route", repository: "public/example", token: "main-secret"},
+		{name: "REST unconditional route", repository: "public/example", token: "main-secret"},
 	}
 	for _, test := range restTests {
 		t.Run(test.name, func(t *testing.T) {
 			path := "/repos/" + test.repository
-			observed := runGHCommand(t, gh, "gh-router-auto", `{"full_name":"`+test.repository+`"}`,
+			observed := runGHCommand(t, gh, "client-secret", `{"full_name":"`+test.repository+`"}`,
 				"api", strings.TrimPrefix(path, "/"), "--jq", ".full_name")
 			if got := strings.TrimSpace(observed.output); got != test.repository {
 				t.Fatalf("gh output = %q", got)
@@ -124,7 +124,7 @@ func TestGHAPICommandRoutingE2E(t *testing.T) {
 
 	t.Run("GraphQL variables", func(t *testing.T) {
 		query := `query($owner:String!,$repo:String!){repository(owner:$owner,name:$repo){nameWithOwner}}`
-		observed := runGHCommand(t, gh, "gh-router-auto", `{"data":{"repository":{"nameWithOwner":"partner/project"}}}`,
+		observed := runGHCommand(t, gh, "client-secret", `{"data":{"repository":{"nameWithOwner":"partner/project"}}}`,
 			"api", "graphql", "-f", "query="+query, "-F", "owner=partner", "-F", "repo=project",
 			"--jq", ".data.repository.nameWithOwner")
 		if got := strings.TrimSpace(observed.output); got != "partner/project" {
@@ -135,7 +135,7 @@ func TestGHAPICommandRoutingE2E(t *testing.T) {
 
 	t.Run("GraphQL literal", func(t *testing.T) {
 		query := `query { repository(owner:"related",name:"library") { nameWithOwner } }`
-		observed := runGHCommand(t, gh, "gh-router-auto", `{"data":{"repository":{"nameWithOwner":"related/library"}}}`,
+		observed := runGHCommand(t, gh, "client-secret", `{"data":{"repository":{"nameWithOwner":"related/library"}}}`,
 			"api", "graphql", "-f", "query="+query, "--jq", ".data.repository.nameWithOwner")
 		if got := strings.TrimSpace(observed.output); got != "related/library" {
 			t.Fatalf("gh output = %q", got)
@@ -144,7 +144,7 @@ func TestGHAPICommandRoutingE2E(t *testing.T) {
 	})
 
 	t.Run("explicit credential hint", func(t *testing.T) {
-		observed := runGHCommand(t, gh, "gh-router-partner", `{"login":"octocat"}`,
+		observed := runGHCommand(t, gh, "client-secret:partner", `{"login":"octocat"}`,
 			"api", "user", "--jq", ".login")
 		if got := strings.TrimSpace(observed.output); got != "octocat" {
 			t.Fatalf("gh output = %q", got)
@@ -165,7 +165,7 @@ func TestGHAPICommandRoutingE2E(t *testing.T) {
 
 	t.Run("ambiguous GraphQL route is rejected", func(t *testing.T) {
 		query := `query { a: repository(owner:"related",name:"one") { id } b: repository(owner:"partner",name:"two") { id } }`
-		observed := runGHCommandResult(t, gh, "gh-router-auto", `{"data":{}}`,
+		observed := runGHCommandResult(t, gh, "client-secret", `{"data":{}}`,
 			"api", "graphql", "-f", "query="+query)
 		if observed.err == nil {
 			t.Fatal("gh succeeded with an ambiguous GraphQL route")
@@ -187,12 +187,17 @@ func TestGitSmartHTTPRoutingE2E(t *testing.T) {
 	}{
 		{name: "exact repository route", repository: "acme/main", token: "main-secret"},
 		{name: "owner route", repository: "related/library", token: "related-secret"},
-		{name: "default route", repository: "public/example", token: "main-secret"},
+		{name: "unconditional route", repository: "public/example", token: "main-secret"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			clientAuthorization := "Authorization: Basic " + base64.StdEncoding.EncodeToString([]byte("x-access-token:client-secret"))
 			result := runProxiedCommandResult(t, git,
-				[]string{"-c", "protocol.version=0", "ls-remote", "https://github.com/" + test.repository + ".git"},
+				[]string{
+					"-c", "protocol.version=0",
+					"-c", "http.https://github.com/.extraHeader=" + clientAuthorization,
+					"ls-remote", "https://github.com/" + test.repository + ".git",
+				},
 				[]string{
 					"GIT_CONFIG_NOSYSTEM=1",
 					"GIT_TERMINAL_PROMPT=0",
@@ -293,7 +298,7 @@ func runProxiedCommandResult(t *testing.T, executable string, args, environment 
 		}, nil
 	})
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	proxy := newProxy(testConfig(), ca, upstream, logger, map[string]bool{"api.github.com": true, "github.com": true})
+	proxy := newProxy(testConfig(), ca, upstream, logger)
 	proxyServer := httptest.NewServer(proxy.Handler())
 	t.Cleanup(proxyServer.Close)
 

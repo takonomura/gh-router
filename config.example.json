@@ -3,23 +3,32 @@
   "server": {
     "listen": "127.0.0.1:8080"
   },
-  "github": {
-    "hosts": ["api.github.com", "github.com"]
+  "authentication": {
+    "tokenEnv": "GH_ROUTER_CLIENT_TOKEN"
   },
   "routing": {
-    "autoHint": "gh-router-auto",
-    "defaultCredential": "main",
-    "credentialHints": {
-      "gh-router-main": "main",
-      "gh-router-related": "related-read"
-    },
     "routes": [
-      {"repository": "acme/main", "credential": "main"},
-      {"owner": "acme-related", "credential": "related-read"}
+      {
+        "when": {"repository": "acme/main"},
+        "credential": "main"
+      },
+      {
+        "when": {"owner": "acme-related"},
+        "credential": "related-read"
+      },
+      {"credential": "main"}
     ]
   },
   "credentials": [
-    {"id": "main", "tokenEnv": "GH_ROUTER_TOKEN_MAIN"},
-    {"id": "related-read", "tokenEnv": "GH_ROUTER_TOKEN_RELATED"}
+    {
+      "id": "main",
+      "tokenEnv": "GH_ROUTER_TOKEN_MAIN",
+      "hints": ["main"]
+    },
+    {
+      "id": "related-read",
+      "tokenEnv": "GH_ROUTER_TOKEN_RELATED",
+      "hints": ["related", "related-read"]
+    }
   ]
 }

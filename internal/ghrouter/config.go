@@ -1,6 +1,8 @@
 package ghrouter
 
 import (
+	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,11 +14,11 @@ import (
 const maxConfigSize = 1 << 20
 
 type Config struct {
-	Version     int           `json:"version"`
-	Server      ServerConfig  `json:"server"`
-	GitHub      GitHubConfig  `json:"github"`
-	Routing     RoutingConfig `json:"routing"`
-	Credentials []Credential  `json:"credentials"`
+	Version        int                  `json:"version"`
+	Server         ServerConfig         `json:"server"`
+	Authentication AuthenticationConfig `json:"authentication"`
+	Routing        RoutingConfig        `json:"routing"`
+	Credentials    []Credential         `json:"credentials"`
 }
 
 type ServerConfig struct {
@@ -25,26 +27,29 @@ type ServerConfig struct {
 	CAPrivateKey  string `json:"caPrivateKey"`
 }
 
-type GitHubConfig struct {
-	Hosts []string `json:"hosts"`
+type AuthenticationConfig struct {
+	TokenEnv string `json:"tokenEnv"`
+	token    string
 }
 
 type RoutingConfig struct {
-	AutoHint          string            `json:"autoHint"`
-	DefaultCredential string            `json:"defaultCredential"`
-	CredentialHints   map[string]string `json:"credentialHints"`
-	Routes            []RouteConfig     `json:"routes"`
+	Routes []RouteConfig `json:"routes"`
 }
 
 type RouteConfig struct {
+	When       *RouteCondition `json:"when,omitempty"`
+	Credential string          `json:"credential"`
+}
+
+type RouteCondition struct {
 	Repository string `json:"repository,omitempty"`
 	Owner      string `json:"owner,omitempty"`
-	Credential string `json:"credential"`
 }
 
 type Credential struct {
-	ID       string `json:"id"`
-	TokenEnv string `json:"tokenEnv"`
+	ID       string   `json:"id"`
+	TokenEnv string   `json:"tokenEnv"`
+	Hints    []string `json:"hints,omitempty"`
 	token    string
 }
 
@@ -93,31 +98,18 @@ func (cfg *Config) validateAndLoadTokens() error {
 	if (cfg.Server.CACertificate == "") != (cfg.Server.CAPrivateKey == "") {
 		return errors.New("config: server CA certificate and private key must be specified together")
 	}
-	if strings.TrimSpace(cfg.Routing.AutoHint) == "" {
-		return errors.New("config: routing.autoHint is required")
-	}
 
-	allowedHostNames := map[string]bool{
-		"api.github.com": true,
-		"github.com":     true,
+	clientToken, err := loadTokenEnvironment(cfg.Authentication.TokenEnv, "authentication.tokenEnv")
+	if err != nil {
+		return err
 	}
-	seenHosts := make(map[string]bool)
-	for i, host := range cfg.GitHub.Hosts {
-		host = strings.ToLower(strings.TrimSpace(host))
-		if !allowedHostNames[host] {
-			return fmt.Errorf("config: github.hosts[%d] is not supported: %q", i, host)
-		}
-		if seenHosts[host] {
-			return fmt.Errorf("config: duplicate GitHub host %q", host)
-		}
-		seenHosts[host] = true
-		cfg.GitHub.Hosts[i] = host
+	if strings.Contains(clientToken, ":") {
+		return errors.New("config: proxy access token must not contain ':'")
 	}
-	if len(seenHosts) == 0 {
-		return errors.New("config: at least one GitHub host is required")
-	}
+	cfg.Authentication.token = clientToken
 
 	credentialIDs := make(map[string]bool)
+	seenHints := make(map[string]bool)
 	for i := range cfg.Credentials {
 		credential := &cfg.Credentials[i]
 		if credential.ID == "" || credential.TokenEnv == "" {
@@ -128,32 +120,30 @@ func (cfg *Config) validateAndLoadTokens() error {
 		}
 		credentialIDs[credential.ID] = true
 
-		token, ok := os.LookupEnv(credential.TokenEnv)
-		if !ok || strings.TrimSpace(token) == "" {
-			return fmt.Errorf("config: environment variable %s is empty or unset", credential.TokenEnv)
+		token, err := loadTokenEnvironment(credential.TokenEnv, fmt.Sprintf("credentials[%d].tokenEnv", i))
+		if err != nil {
+			return err
 		}
-		if token != strings.TrimSpace(token) {
-			return fmt.Errorf("config: environment variable %s contains surrounding whitespace", credential.TokenEnv)
+		if secureTokenEqual(token, clientToken) {
+			return fmt.Errorf("config: credentials[%d] token must differ from the proxy access token", i)
 		}
 		credential.token = token
+
+		for j, hint := range credential.Hints {
+			if hint == "" || hint != strings.TrimSpace(hint) {
+				return fmt.Errorf("config: credentials[%d].hints[%d] must not be empty or contain surrounding whitespace", i, j)
+			}
+			if strings.Contains(hint, ":") {
+				return fmt.Errorf("config: credentials[%d].hints[%d] must not contain ':'", i, j)
+			}
+			if seenHints[hint] {
+				return fmt.Errorf("config: duplicate credential hint %q", hint)
+			}
+			seenHints[hint] = true
+		}
 	}
 	if len(credentialIDs) == 0 {
 		return errors.New("config: at least one credential is required")
-	}
-
-	if cfg.Routing.DefaultCredential != "" && !credentialIDs[cfg.Routing.DefaultCredential] {
-		return fmt.Errorf("config: default credential %q does not exist", cfg.Routing.DefaultCredential)
-	}
-	for hint, credentialID := range cfg.Routing.CredentialHints {
-		if strings.TrimSpace(hint) == "" {
-			return errors.New("config: credential hint must not be empty")
-		}
-		if hint == cfg.Routing.AutoHint {
-			return errors.New("config: auto hint conflicts with a credential hint")
-		}
-		if !credentialIDs[credentialID] {
-			return fmt.Errorf("config: hint %q references unknown credential %q", hint, credentialID)
-		}
 	}
 
 	seenRepositories := make(map[string]bool)
@@ -163,31 +153,57 @@ func (cfg *Config) validateAndLoadTokens() error {
 		if !credentialIDs[route.Credential] {
 			return fmt.Errorf("config: routes[%d] references unknown credential %q", i, route.Credential)
 		}
-		if (route.Repository == "") == (route.Owner == "") {
-			return fmt.Errorf("config: routes[%d] must set exactly one of repository or owner", i)
+		if route.When == nil {
+			if i != len(cfg.Routing.Routes)-1 {
+				return fmt.Errorf("config: routes[%d] without when must be the final route", i)
+			}
+			continue
 		}
-		if route.Repository != "" {
-			repository, ok := canonicalRepository(route.Repository)
+		if (route.When.Repository == "") == (route.When.Owner == "") {
+			return fmt.Errorf("config: routes[%d].when must set exactly one of repository or owner", i)
+		}
+		if route.When.Repository != "" {
+			repository, ok := canonicalRepository(route.When.Repository)
 			if !ok {
-				return fmt.Errorf("config: routes[%d] has invalid repository %q", i, route.Repository)
+				return fmt.Errorf("config: routes[%d] has invalid repository %q", i, route.When.Repository)
 			}
 			if seenRepositories[repository] {
 				return fmt.Errorf("config: duplicate repository route %q", repository)
 			}
 			seenRepositories[repository] = true
-			route.Repository = repository
+			route.When.Repository = repository
 			continue
 		}
 
-		owner, ok := canonicalName(route.Owner)
+		owner, ok := canonicalName(route.When.Owner)
 		if !ok {
-			return fmt.Errorf("config: routes[%d] has invalid owner %q", i, route.Owner)
+			return fmt.Errorf("config: routes[%d] has invalid owner %q", i, route.When.Owner)
 		}
 		if seenOwners[owner] {
 			return fmt.Errorf("config: duplicate owner route %q", owner)
 		}
 		seenOwners[owner] = true
-		route.Owner = owner
+		route.When.Owner = owner
 	}
 	return nil
+}
+
+func loadTokenEnvironment(name, field string) (string, error) {
+	if strings.TrimSpace(name) == "" {
+		return "", fmt.Errorf("config: %s is required", field)
+	}
+	token, ok := os.LookupEnv(name)
+	if !ok || strings.TrimSpace(token) == "" {
+		return "", fmt.Errorf("config: environment variable %s is empty or unset", name)
+	}
+	if token != strings.TrimSpace(token) {
+		return "", fmt.Errorf("config: environment variable %s contains surrounding whitespace", name)
+	}
+	return token, nil
+}
+
+func secureTokenEqual(left, right string) bool {
+	leftHash := sha256.Sum256([]byte(left))
+	rightHash := sha256.Sum256([]byte(right))
+	return subtle.ConstantTimeCompare(leftHash[:], rightHash[:]) == 1
 }
