@@ -210,7 +210,7 @@ Git request も proxy access token を `Authorization` に先行送信する必�
 
 ### 7.1. 一時 command sidecar
 
-Linux と macOS では、一つの command の実行中だけ proxy を起動できる。
+Linux では、一つの command の実行中だけ proxy を起動できる。
 
 ```sh
 gh-router exec -config config.json -- gh repo view acme/main
