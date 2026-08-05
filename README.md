@@ -69,6 +69,56 @@ Real GitHub token environment variable names are configured in
 `authentication.tokenEnv`; it must not be the same value as any GitHub token.
 Token values are never read from the JSON file.
 
+## Temporary command sidecar
+
+On Linux and macOS, `exec` starts a temporary proxy for one command:
+
+```sh
+./gh-router exec -config config.json -- gh repo view acme/main
+```
+
+The executor starts the proxy as a child sidecar, waits until it is ready, and
+then replaces itself with the command. The command therefore keeps the
+executor's PID, exit status, and signal behavior. The sidecar stops after its
+parent command exits.
+
+`exec` always listens on an automatically assigned `127.0.0.1` port; it does
+not use `server.listen`. It replaces these variables in the command
+environment:
+
+```text
+HTTPS_PROXY, HTTP_PROXY, https_proxy, http_proxy
+NO_PROXY, no_proxy
+SSL_CERT_FILE
+GH_HOST
+GH_TOKEN
+```
+
+`GH_TOKEN` contains the proxy access token, not a real GitHub token. To select
+a configured credential hint explicitly, use:
+
+```sh
+./gh-router exec -config config.json -hint related -- gh api graphql ...
+```
+
+The executor removes the configured real-token variables and known ambient
+GitHub token variables from the command environment. The sidecar writes only
+its public CA certificate to the temporary path in `SSL_CERT_FILE`; an
+ephemeral CA private key remains in sidecar memory and is never written to
+disk. The public certificate and its temporary directory are removed when the
+command exits.
+
+This mode is intended to wrap a trusted sandbox launcher. The sandbox must be
+able to reach the host loopback proxy, read the temporary public CA file, and
+receive the variables above, while preventing the untrusted command from
+inspecting host processes or token sources. A command with unrestricted access
+to same-user host processes can inspect or interfere with its sidecar and is
+not isolated by this helper alone.
+
+The helper does not set up Git authentication. In particular, it does not add
+a Git `extraHeader` or credential helper. Configure Git separately when it is
+needed.
+
 ## Sandbox environment
 
 Download the public CA certificate from the proxy's HTTP endpoint, then
@@ -89,12 +139,10 @@ export SSL_CERT_FILE='/run/gh-router/ca.pem'
 export GIT_SSL_CAINFO='/run/gh-router/ca.pem'
 
 export GH_HOST='github.com'
-export GH_ROUTER_ACCESS_TOKEN='a-separate-random-client-secret'
-export GH_TOKEN="$GH_ROUTER_ACCESS_TOKEN"
-export GH_PROMPT_DISABLED='1'
+export GH_TOKEN='a-separate-random-client-secret'
 
 git config --global http.https://github.com/.extraHeader \
-  "Authorization: Basic $(printf 'x-access-token:%s' "$GH_ROUTER_ACCESS_TOKEN" | base64 | tr -d '\n')"
+  "Authorization: Basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')"
 ```
 
 `GET /ca.pem` uses the proxy listener itself and works for generated and
@@ -116,7 +164,7 @@ whose target cannot be inferred, append one of the non-secret hints configured
 in `credentials[].hints`:
 
 ```sh
-GH_TOKEN="$GH_ROUTER_ACCESS_TOKEN:related" gh api graphql ...
+GH_TOKEN='a-separate-random-client-secret:related' gh api graphql ...
 ```
 
 Hints select a credential but do not grant access to the proxy. A request must
@@ -126,6 +174,7 @@ request to `github.com` is rejected before a real token is attached.
 
 ## Current scope
 
+- Temporary per-command sidecar execution on Linux and macOS
 - In-memory ephemeral CA generation and `GET /ca.pem`, or a file-backed CA
 - `api.github.com`: REST and GraphQL
 - `github.com`: Git smart HTTP only

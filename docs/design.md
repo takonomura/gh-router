@@ -2,7 +2,7 @@
 
 - Status: Draft
 - 対象: GitHub.com
-- 最終更新: 2026-07-20
+- 最終更新: 2026-08-05
 
 ## 1. 概要
 
@@ -208,6 +208,61 @@ Git request も proxy access token を `Authorization` に先行送信する必�
 
 ## 7. Client setup
 
+### 7.1. 一時 command sidecar
+
+Linux と macOS では、一つの command の実行中だけ proxy を起動できる。
+
+```sh
+gh-router exec -config config.json -- gh repo view acme/main
+```
+
+executor は同じ binary を sidecar として子 process に起動し、proxy の準備完了を
+pipe で待ってから自身を指定 command に `exec` する。process tree は次の形になる。
+
+```text
+起動元
+└── command（executor と同じ PID）
+    └── gh-router sidecar
+```
+
+この形により起動元から見える PID、終了 status、終了 signal は command 自身の
+ものになる。sidecar は元の親 PID を監視し、command の終了後に proxy を停止する。
+
+`exec` mode は `server.listen` を使わず、常に `127.0.0.1:0` へ bind する。
+準備完了後、command の環境へ次を設定する。
+
+```text
+HTTPS_PROXY, HTTP_PROXY, https_proxy, http_proxy = 一時 proxy URL
+NO_PROXY, no_proxy = 空
+SSL_CERT_FILE = 一時公開 CA 証明書 path
+GH_HOST = github.com
+GH_TOKEN = proxy access token と任意の :hint
+```
+
+実 token を指す設定済み環境変数、同じ実 token value を持つ環境変数、および
+既知の ambient GitHub token 環境変数は command の環境から除く。hint を明示
+する場合は、設定済みの値だけを `-hint` に指定できる。
+
+```sh
+gh-router exec -config config.json -hint partner -- gh api graphql ...
+```
+
+sidecar が生成する CA private key は memory 内だけに保持する。`SSL_CERT_FILE`
+が指す一時ファイルには公開 CA 証明書だけを書き、private key は書かない。
+外部管理 CA の場合も既存 private key を読み込むだけで、一時領域へ複製しない。
+一時公開証明書と directory は command 終了後に削除する。
+
+この mode は信頼済み sandbox launcher を `exec` するためのものである。sandbox
+は host loopback、一時公開 CA file、上記環境変数を利用できる一方、内部の
+未信頼 command から host process や token source を参照できない必要がある。
+同じ user の host process を自由に検査できる command に対しては、sidecar が
+command の子であるため、この helper 単体では実 token を隔離できない。
+
+`exec` mode は Git の `extraHeader` や credential helper を設定しない。Git
+authentication が必要な環境では、sandbox launcher または Git 側で別途設定する。
+
+### 7.2. 手動 setup
+
 サンドボックスでは、薄い wrapper または起動時設定で次を渡す。
 
 ```sh
@@ -225,12 +280,10 @@ export SSL_CERT_FILE='/run/gh-router/ca.pem'
 export GIT_SSL_CAINFO='/run/gh-router/ca.pem'
 
 export GH_HOST='github.com'
-export GH_ROUTER_ACCESS_TOKEN='proxy-access-token-from-a-secret-channel'
-export GH_TOKEN="$GH_ROUTER_ACCESS_TOKEN"
-export GH_PROMPT_DISABLED='1'
+export GH_TOKEN='proxy-access-token-from-a-secret-channel'
 
 git config --global http.https://github.com/.extraHeader \
-  "Authorization: Basic $(printf 'x-access-token:%s' "$GH_ROUTER_ACCESS_TOKEN" | base64 | tr -d '\n')"
+  "Authorization: Basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')"
 ```
 
 生成 CA を使う場合は proxy の再起動後に必ず証明書を取得し直す。HTTP による
@@ -241,7 +294,7 @@ git config --global http.https://github.com/.extraHeader \
 通常は proxy access token だけを送り、target extraction と ordered route に任せる。対象を抽出できない command で credential を指定する場合は、実 token ではなく access token に hint を付ける。
 
 ```sh
-GH_TOKEN="$GH_ROUTER_ACCESS_TOKEN:partner" gh api graphql ...
+GH_TOKEN='proxy-access-token-from-a-secret-channel:partner' gh api graphql ...
 ```
 
 hint を選ぶ操作は通常の利用では不要にし、実践投入で extractor が対応できなかった command の回避策として残す。後でその command の routing pattern を proxy に追加できる。
