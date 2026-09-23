@@ -71,7 +71,7 @@ Token values are never read from the JSON file.
 
 ## Temporary command sidecar
 
-On Linux, `exec` starts a temporary proxy for one command:
+On Linux and macOS, `exec` starts a temporary proxy for one command:
 
 ```sh
 ./gh-router exec -config config.json -- gh repo view acme/main
@@ -174,7 +174,7 @@ request to `github.com` is rejected before a real token is attached.
 
 ## Current scope
 
-- Temporary per-command sidecar execution on Linux
+- Temporary per-command sidecar execution on Linux and macOS
 - In-memory ephemeral CA generation and `GET /ca.pem`, or a file-backed CA
 - `api.github.com`: REST and GraphQL
 - `github.com`: Git smart HTTP only
