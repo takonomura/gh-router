@@ -1,4 +1,4 @@
-//go:build !linux && !darwin
+//go:build !unix
 
 package ghrouter
 
@@ -11,9 +11,9 @@ import (
 var lookPath = exec.LookPath
 
 func ExecCommand(configPath, hint string, command []string) error {
-	return errors.New("gh-router exec is supported only on Linux and macOS")
+	return errors.New("gh-router exec is supported only on Unix-like systems")
 }
 
 func RunSidecar(configPath string, parentPID int, ready *os.File) error {
-	return errors.New("gh-router exec is supported only on Linux and macOS")
+	return errors.New("gh-router exec is supported only on Unix-like systems")
 }
