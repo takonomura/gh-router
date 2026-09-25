@@ -213,7 +213,7 @@ func TestGraphQLBodyIsRestored(t *testing.T) {
 
 func TestRouterRejectsMissingRouteWithoutDefault(t *testing.T) {
 	cfg := testConfig()
-	cfg.Routing.Routes = cfg.Routing.Routes[:len(cfg.Routing.Routes)-1]
+	cfg.Routes = cfg.Routes[:len(cfg.Routes)-1]
 	router := NewRouter(cfg)
 	req := newRouterRequest(t, http.MethodGet, "/user", "")
 
@@ -238,7 +238,7 @@ func TestRouterRejectsMissingAuthentication(t *testing.T) {
 
 func TestRouterEvaluatesRoutesInOrder(t *testing.T) {
 	cfg := testConfig()
-	cfg.Routing.Routes = []RouteConfig{
+	cfg.Routes = []RouteConfig{
 		{When: &RouteCondition{Owner: "acme"}, Credential: "related-read"},
 		{When: &RouteCondition{Repository: "acme/main"}, Credential: "main"},
 		{Credential: "main"},
@@ -272,13 +272,11 @@ func newRouterRequest(t *testing.T, method, path, body string) *http.Request {
 func testConfig() *Config {
 	return &Config{
 		Authentication: AuthenticationConfig{token: "client-secret"},
-		Routing: RoutingConfig{
-			Routes: []RouteConfig{
-				{When: &RouteCondition{Repository: "acme/main"}, Credential: "main"},
-				{When: &RouteCondition{Owner: "related"}, Credential: "related-read"},
-				{When: &RouteCondition{Owner: "partner"}, Credential: "partner-read"},
-				{Credential: "main"},
-			},
+		Routes: []RouteConfig{
+			{When: &RouteCondition{Repository: "acme/main"}, Credential: "main"},
+			{When: &RouteCondition{Owner: "related"}, Credential: "related-read"},
+			{When: &RouteCondition{Owner: "partner"}, Credential: "partner-read"},
+			{Credential: "main"},
 		},
 		Credentials: []Credential{
 			{ID: "main", Hints: []string{"main"}, token: "main-secret"},

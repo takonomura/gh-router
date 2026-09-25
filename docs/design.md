@@ -2,7 +2,7 @@
 
 - Status: Draft
 - 対象: GitHub.com
-- 最終更新: 2026-08-05
+- 最終更新: 2026-09-25
 
 ## 1. 概要
 
@@ -98,25 +98,23 @@ credential を選べない場合、または client が未知の token/Cookie �
     "listen": "0.0.0.0:8080"
   },
   "authentication": {
-    "tokenEnv": "GH_ROUTER_CLIENT_TOKEN"
+    "tokenFrom": {"env": "GH_ROUTER_CLIENT_TOKEN"}
   },
-  "routing": {
-    "routes": [
-      {"when": {"repository": "acme/main"}, "credential": "main"},
-      {"when": {"owner": "acme-related"}, "credential": "acme-related-read"},
-      {"when": {"owner": "partner"}, "credential": "partner-read"},
-      {"credential": "main"}
-    ]
-  },
+  "routes": [
+    {"when": {"repository": "acme/main"}, "credential": "main"},
+    {"when": {"owner": "acme-related"}, "credential": "acme-related-read"},
+    {"when": {"owner": "partner"}, "credential": "partner-read"},
+    {"credential": "main"}
+  ],
   "credentials": [
-    {"id": "main", "tokenEnv": "GH_ROUTER_TOKEN_MAIN", "hints": ["main"]},
-    {"id": "acme-related-read", "tokenEnv": "GH_ROUTER_TOKEN_ACME_RELATED", "hints": ["acme-related"]},
-    {"id": "partner-read", "tokenEnv": "GH_ROUTER_TOKEN_PARTNER", "hints": ["partner"]}
+    {"id": "main", "tokenFrom": {"env": "GH_ROUTER_TOKEN_MAIN"}, "hints": ["main"]},
+    {"id": "acme-related-read", "tokenFrom": {"env": "GH_ROUTER_TOKEN_ACME_RELATED"}, "hints": ["acme-related"]},
+    {"id": "partner-read", "tokenFrom": {"env": "GH_ROUTER_TOKEN_PARTNER"}, "hints": ["partner"]}
   ]
 }
 ```
 
-`server.caCertificate` と `server.caPrivateKey` を両方省略すると、起動時に
+`server.ca` を省略すると、起動時に
 P-256 の CA 鍵と自己署名証明書をメモリ上で生成する。秘密鍵はファイルへ
 書き出さず、公開 CA 証明書だけを proxy listener の `GET /ca.pem` で返す。
 証明書の有効期間は 24 時間で、process を再起動すると新しい CA になる。
@@ -127,11 +125,16 @@ P-256 の CA 鍵と自己署名証明書をメモリ上で生成する。秘密�
 
 `GH_ROUTER_TOKEN_*` は proxy process にだけ渡す。サンドボックスには渡さない。production の設定ファイルへ token value を直接書かない。
 
-`authentication.tokenEnv` が指す値は GitHub credential とは別の proxy access token であり、proxy process と利用を許可する sandbox の双方に渡す。token 単体は自動 routing、`token:hint` は明示 routing として解釈する。`credentials[].hints` は秘匿情報ではなく、hint を持たない credential は明示選択できない。どの hint を選んでも、GitHub で実行できる範囲は対応する Fine-grained PAT の scope を超えない。
+`authentication.tokenFrom.env` が指す値は GitHub credential とは別の proxy access token であり、proxy process と利用を許可する sandbox の双方に渡す。token 単体は自動 routing、`token:hint` は明示 routing として解釈する。`credentials[].hints` は秘匿情報ではなく、hint を持たない credential は明示選択できない。どの hint を選んでも、GitHub で実行できる範囲は対応する Fine-grained PAT の scope を超えない。
+
+`server` または `server.listen` の省略時は `127.0.0.1:8080` を使う。
+設定内の相対ファイル path は設定ファイルの directory を基準に解決する。
+`server.ca` 指定時は `certificateFile` と `privateKeyFile` を両方必須とする。
+旧形式の `tokenEnv`、`routing`、CA の旧 field は受け付けない。
 
 ### 設定時の確認
 
-- proxy access token は空、前後空白、`:` を許可せず、実 GitHub token と同じ値にしない。
+- proxy access token は空、前後空白、`:` を許可せず、同値の GitHub token は拒否しない。
 - credential ID、hint、exact repository route、owner route は重複させない。
 - route が参照する credential が存在することを起動時に確認する。
 - 条件なし route は省略可能とし、定義する場合は一つだけ末尾に置く。
@@ -322,7 +325,7 @@ MVP を小さくしても、token の漏洩や持ち込み token の利用に直
 
 - client の `Authorization` は必須とし、正しい proxy access token 単体または `token:hint` だけ許可する。
 - `Bearer`/`token` 形式と、Git client が使う Basic auth の password 部分から同じ値を認識する。
-- proxy access token は定時間比較し、実 GitHub token と同じ値の設定は起動時に拒否する。
+- proxy access token は定時間比較する。
 - それ以外の `Authorization`、Cookie、URL userinfo、`access_token`/`client_secret` query parameter は拒否し、単に上書きして転送しない。
 - upstream request の `Authorization` は client header を編集するのではなく、選択した token から作り直す。
 

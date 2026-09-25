@@ -192,10 +192,10 @@ func writeExecTestConfig(t *testing.T) string {
 	content := `{
   "version": 1,
   "server": {"listen": "0.0.0.0:1"},
-  "authentication": {"tokenEnv": "TEST_CLIENT_TOKEN"},
-  "routing": {"routes": [{"credential": "main"}]},
+  "authentication": {"tokenFrom": {"env": "TEST_CLIENT_TOKEN"}},
+  "routes": [{"credential": "main"}],
   "credentials": [
-    {"id": "main", "tokenEnv": "TEST_MAIN_TOKEN", "hints": ["related"]}
+    {"id": "main", "tokenFrom": {"env": "TEST_MAIN_TOKEN"}, "hints": ["related"]}
   ]
 }`
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {

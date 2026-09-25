@@ -38,13 +38,13 @@ func NewProxy(cfg *Config, logger *slog.Logger) (*Proxy, error) {
 
 	var ca *certificateAuthority
 	var err error
-	if cfg.Server.CACertificate == "" {
+	if cfg.Server.CA == nil {
 		ca, err = generateCertificateAuthority()
 		if err == nil {
 			logger.Info("ephemeral CA generated", "certificate_path", caCertificatePath, "expires", ca.certificate.NotAfter)
 		}
 	} else {
-		ca, err = loadCertificateAuthority(cfg.Server.CACertificate, cfg.Server.CAPrivateKey)
+		ca, err = loadCertificateAuthority(cfg.Server.CA.CertificateFile, cfg.Server.CA.PrivateKeyFile)
 	}
 	if err != nil {
 		return nil, err

@@ -4,31 +4,46 @@
     "listen": "127.0.0.1:8080"
   },
   "authentication": {
-    "tokenEnv": "GH_ROUTER_CLIENT_TOKEN"
+    "tokenFrom": {
+      "env": "GH_ROUTER_CLIENT_TOKEN"
+    }
   },
-  "routing": {
-    "routes": [
-      {
-        "when": {"repository": "acme/main"},
-        "credential": "main"
+  "routes": [
+    {
+      "when": {
+        "repository": "acme/main"
       },
-      {
-        "when": {"owner": "acme-related"},
-        "credential": "related-read"
+      "credential": "main"
+    },
+    {
+      "when": {
+        "owner": "acme-related"
       },
-      {"credential": "main"}
-    ]
-  },
+      "credential": "related-read"
+    },
+    {
+      "credential": "main"
+    }
+  ],
   "credentials": [
     {
       "id": "main",
-      "tokenEnv": "GH_ROUTER_TOKEN_MAIN",
-      "hints": ["main"]
+      "tokenFrom": {
+        "env": "GH_ROUTER_TOKEN_MAIN"
+      },
+      "hints": [
+        "main"
+      ]
     },
     {
       "id": "related-read",
-      "tokenEnv": "GH_ROUTER_TOKEN_RELATED",
-      "hints": ["related", "related-read"]
+      "tokenFrom": {
+        "env": "GH_ROUTER_TOKEN_RELATED"
+      },
+      "hints": [
+        "related",
+        "related-read"
+      ]
     }
   ]
 }

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -17,23 +18,27 @@ type Config struct {
 	Version        int                  `json:"version"`
 	Server         ServerConfig         `json:"server"`
 	Authentication AuthenticationConfig `json:"authentication"`
-	Routing        RoutingConfig        `json:"routing"`
+	Routes         []RouteConfig        `json:"routes"`
 	Credentials    []Credential         `json:"credentials"`
 }
 
 type ServerConfig struct {
-	Listen        string `json:"listen"`
-	CACertificate string `json:"caCertificate"`
-	CAPrivateKey  string `json:"caPrivateKey"`
+	Listen string    `json:"listen"`
+	CA     *CAConfig `json:"ca,omitempty"`
+}
+
+type CAConfig struct {
+	CertificateFile string `json:"certificateFile"`
+	PrivateKeyFile  string `json:"privateKeyFile"`
 }
 
 type AuthenticationConfig struct {
-	TokenEnv string `json:"tokenEnv"`
-	token    string
+	TokenFrom TokenSource `json:"tokenFrom"`
+	token     string
 }
 
-type RoutingConfig struct {
-	Routes []RouteConfig `json:"routes"`
+type TokenSource struct {
+	Env string `json:"env,omitempty"`
 }
 
 type RouteConfig struct {
@@ -47,10 +52,10 @@ type RouteCondition struct {
 }
 
 type Credential struct {
-	ID       string   `json:"id"`
-	TokenEnv string   `json:"tokenEnv"`
-	Hints    []string `json:"hints,omitempty"`
-	token    string
+	ID        string      `json:"id"`
+	TokenFrom TokenSource `json:"tokenFrom"`
+	Hints     []string    `json:"hints,omitempty"`
+	token     string
 }
 
 func LoadConfig(path string) (*Config, error) {
@@ -69,6 +74,14 @@ func LoadConfig(path string) (*Config, error) {
 	}
 	if err := ensureJSONEOF(dec); err != nil {
 		return nil, err
+	}
+	if cfg.Server.CA != nil {
+		base, err := filepath.Abs(filepath.Dir(path))
+		if err != nil {
+			return nil, fmt.Errorf("resolve config directory: %w", err)
+		}
+		cfg.Server.CA.CertificateFile = resolveConfigPath(base, cfg.Server.CA.CertificateFile)
+		cfg.Server.CA.PrivateKeyFile = resolveConfigPath(base, cfg.Server.CA.PrivateKeyFile)
 	}
 	if err := cfg.validateAndLoadTokens(); err != nil {
 		return nil, err
@@ -93,13 +106,13 @@ func (cfg *Config) validateAndLoadTokens() error {
 		return fmt.Errorf("config: unsupported version %d", cfg.Version)
 	}
 	if strings.TrimSpace(cfg.Server.Listen) == "" {
-		return errors.New("config: server.listen is required")
+		cfg.Server.Listen = "127.0.0.1:8080"
 	}
-	if (cfg.Server.CACertificate == "") != (cfg.Server.CAPrivateKey == "") {
+	if cfg.Server.CA != nil && (cfg.Server.CA.CertificateFile == "" || cfg.Server.CA.PrivateKeyFile == "") {
 		return errors.New("config: server CA certificate and private key must be specified together")
 	}
 
-	clientToken, err := loadTokenEnvironment(cfg.Authentication.TokenEnv, "authentication.tokenEnv")
+	clientToken, err := loadTokenEnvironment(cfg.Authentication.TokenFrom.Env, "authentication.tokenFrom.env")
 	if err != nil {
 		return err
 	}
@@ -112,20 +125,17 @@ func (cfg *Config) validateAndLoadTokens() error {
 	seenHints := make(map[string]bool)
 	for i := range cfg.Credentials {
 		credential := &cfg.Credentials[i]
-		if credential.ID == "" || credential.TokenEnv == "" {
-			return fmt.Errorf("config: credentials[%d] requires id and tokenEnv", i)
+		if credential.ID == "" || credential.TokenFrom.Env == "" {
+			return fmt.Errorf("config: credentials[%d] requires id and tokenFrom.env", i)
 		}
 		if credentialIDs[credential.ID] {
 			return fmt.Errorf("config: duplicate credential %q", credential.ID)
 		}
 		credentialIDs[credential.ID] = true
 
-		token, err := loadTokenEnvironment(credential.TokenEnv, fmt.Sprintf("credentials[%d].tokenEnv", i))
+		token, err := loadTokenEnvironment(credential.TokenFrom.Env, fmt.Sprintf("credentials[%d].tokenFrom.env", i))
 		if err != nil {
 			return err
-		}
-		if secureTokenEqual(token, clientToken) {
-			return fmt.Errorf("config: credentials[%d] token must differ from the proxy access token", i)
 		}
 		credential.token = token
 
@@ -148,13 +158,13 @@ func (cfg *Config) validateAndLoadTokens() error {
 
 	seenRepositories := make(map[string]bool)
 	seenOwners := make(map[string]bool)
-	for i := range cfg.Routing.Routes {
-		route := &cfg.Routing.Routes[i]
+	for i := range cfg.Routes {
+		route := &cfg.Routes[i]
 		if !credentialIDs[route.Credential] {
 			return fmt.Errorf("config: routes[%d] references unknown credential %q", i, route.Credential)
 		}
 		if route.When == nil {
-			if i != len(cfg.Routing.Routes)-1 {
+			if i != len(cfg.Routes)-1 {
 				return fmt.Errorf("config: routes[%d] without when must be the final route", i)
 			}
 			continue
@@ -206,4 +216,11 @@ func secureTokenEqual(left, right string) bool {
 	leftHash := sha256.Sum256([]byte(left))
 	rightHash := sha256.Sum256([]byte(right))
 	return subtle.ConstantTimeCompare(leftHash[:], rightHash[:]) == 1
+}
+
+func resolveConfigPath(base, path string) string {
+	if path == "" || filepath.IsAbs(path) {
+		return path
+	}
+	return filepath.Join(base, path)
 }

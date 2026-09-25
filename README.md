@@ -38,7 +38,7 @@ export GH_ROUTER_CLIENT_TOKEN='a-separate-random-client-secret'
 ./gh-router -config config.json
 ```
 
-When `server.caCertificate` and `server.caPrivateKey` are both omitted, the
+When `server.ca` is omitted, the
 proxy generates an ephemeral CA in memory at startup. Its private key is never
 written to disk or returned over HTTP. The CA is valid for 24 hours and a new
 one is generated on every restart.
@@ -59,15 +59,20 @@ chmod 600 ca-key.pem
 ```json
 "server": {
   "listen": "127.0.0.1:8080",
-  "caCertificate": "/etc/gh-router/ca.pem",
-  "caPrivateKey": "/etc/gh-router/ca-key.pem"
+  "ca": {"certificateFile": "/etc/gh-router/ca.pem", "privateKeyFile": "/etc/gh-router/ca-key.pem"}
 }
 ```
 
 Real GitHub token environment variable names are configured in
-`credentials[].tokenEnv`. The separate proxy access token is configured in
-`authentication.tokenEnv`; it must not be the same value as any GitHub token.
+`credentials[].tokenFrom.env`. The separate proxy access token is configured in
+`authentication.tokenFrom.env`.
 Token values are never read from the JSON file.
+
+Configuration paths are relative to the configuration file directory. Omitting
+`server.listen` (or `server`) defaults to `127.0.0.1:8080`; `exec` always uses
+an automatically assigned loopback port. If `server.ca` is supplied, both
+`certificateFile` and `privateKeyFile` are required. Legacy `tokenEnv`,
+`routing`, `caCertificate`, and `caPrivateKey` fields are no longer accepted.
 
 ## Temporary command sidecar
 

@@ -21,10 +21,10 @@ func TestClientCredential(t *testing.T) {
 
 func TestCommandEnvironmentIsolatesGitHubTokens(t *testing.T) {
 	cfg := testConfig()
-	cfg.Authentication.TokenEnv = "TEST_CLIENT_TOKEN"
-	cfg.Credentials[0].TokenEnv = "TEST_MAIN_TOKEN"
-	cfg.Credentials[1].TokenEnv = "TEST_RELATED_TOKEN"
-	cfg.Credentials[2].TokenEnv = "TEST_PARTNER_TOKEN"
+	cfg.Authentication.TokenFrom.Env = "TEST_CLIENT_TOKEN"
+	cfg.Credentials[0].TokenFrom.Env = "TEST_MAIN_TOKEN"
+	cfg.Credentials[1].TokenFrom.Env = "TEST_RELATED_TOKEN"
+	cfg.Credentials[2].TokenFrom.Env = "TEST_PARTNER_TOKEN"
 
 	environment := commandEnvironment([]string{
 		"PATH=/usr/bin",

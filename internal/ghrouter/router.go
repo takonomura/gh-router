@@ -66,10 +66,10 @@ func NewRouter(cfg *Config) *Router {
 	router := &Router{
 		clientToken: cfg.Authentication.token,
 		hints:       make(map[string]string),
-		routes:      make([]runtimeRoute, 0, len(cfg.Routing.Routes)),
+		routes:      make([]runtimeRoute, 0, len(cfg.Routes)),
 		credentials: make(map[string]runtimeCredential, len(cfg.Credentials)),
 	}
-	for _, route := range cfg.Routing.Routes {
+	for _, route := range cfg.Routes {
 		runtimeRoute := runtimeRoute{credential: route.Credential}
 		if route.When != nil {
 			runtimeRoute.repository = route.When.Repository
