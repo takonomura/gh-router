@@ -29,17 +29,15 @@ To use a `gh` binary outside `PATH`, set `GH_ROUTER_E2E_GH=/path/to/gh`.
 
 ## Setup
 
-Copy [`config.example.json`](config.example.json), update the routes, and provide the real tokens only to the proxy process:
+Copy [`config.example.json`](config.example.json), update the routes and token sources, and provide the real tokens only to the proxy process:
 
 ```sh
 export GH_ROUTER_TOKEN_MAIN='github_pat_...'
-export GH_ROUTER_TOKEN_RELATED='github_pat_...'
 export GH_ROUTER_CLIENT_TOKEN='a-separate-random-client-secret'
 ./gh-router -config config.json
 ```
 
-When `server.ca` is omitted, the
-proxy generates an ephemeral CA in memory at startup. Its private key is never
+When `server.ca` is omitted, the proxy generates an ephemeral CA in memory at startup. Its private key is never
 written to disk or returned over HTTP. The CA is valid for 24 hours and a new
 one is generated on every restart.
 
@@ -63,16 +61,72 @@ chmod 600 ca-key.pem
 }
 ```
 
-Real GitHub token environment variable names are configured in
-`credentials[].tokenFrom.env`. The separate proxy access token is configured in
-`authentication.tokenFrom.env`.
-Token values are never read from the JSON file.
+### Configuration and token sources
 
-Configuration paths are relative to the configuration file directory. Omitting
-`server.listen` (or `server`) defaults to `127.0.0.1:8080`; `exec` always uses
-an automatically assigned loopback port. If `server.ca` is supplied, both
-`certificateFile` and `privateKeyFile` are required. Legacy `tokenEnv`,
+Both `authentication.tokenFrom` and `credentials[].tokenFrom` accept exactly
+one of these sources:
+
+```json
+{"env": "GH_ROUTER_TOKEN"}
+```
+
+```json
+{"file": "./secrets/github-token"}
+```
+
+```json
+{
+  "command": {
+    "argv": ["token-helper", "get", "github"],
+    "cacheTTL": "5m",
+    "timeout": "30s"
+  }
+}
+```
+
+The helper is an executable you supply; its stdout must contain only the token.
+Commands run directly, with no shell expansion, in the configuration file's
+directory and inherit the proxy's environment. Use an explicit
+`["sh", "-c", "..."]` when shell syntax is needed. Stdin and stderr are connected
+to the null device. Command arguments and output are not included in errors or
+logs. `cacheTTL` and `timeout` are positive Go duration strings (for example,
+`30s` or `5m`); their defaults are five minutes and thirty seconds.
+
+| Token | Environment | File | Command |
+| --- | --- | --- | --- |
+| Proxy authentication | Read at startup | Read at startup | Run once at startup |
+| GitHub credential | Read at startup | Read on each selected request | Run on first selected request, then cache for the TTL |
+
+Proxy authentication stays fixed until restart, including when a command's
+`cacheTTL` expires. Failure to obtain it prevents startup. GitHub file and
+command sources are read only after client authentication and route selection.
+A command's TTL starts on successful completion. Concurrent requests for the
+same credential share one invocation, while different credentials have separate
+caches. Request cancellation stops that request's wait without canceling the
+shared invocation, which has its own timeout. Caches are in memory for one proxy
+process; separate `exec` invocations do not share them.
+
+Failure to obtain a GitHub token returns `503 credential_unavailable` without
+contacting GitHub. Expired tokens are not reused after a failed refresh; the next
+request tries the source again. GitHub rejection never causes token refresh,
+credential fallback, or request replay.
+
+Files and command stdout are limited to 64 KiB including surrounding whitespace,
+which is removed before validation. Empty tokens and internal whitespace or
+control characters are rejected. Environment values must not contain surrounding
+whitespace. Proxy authentication additionally rejects `:`, which separates a
+credential hint. Equality between proxy and GitHub tokens is not rejected.
+
+Configuration file paths are relative to the configuration file directory.
+Omitting `server.listen` (or `server`) defaults to `127.0.0.1:8080`; `exec`
+always uses an automatically assigned loopback port. If `server.ca` is supplied,
+both `certificateFile` and `privateKeyFile` are required. Credentials remain an
+array with unique IDs; `routes` is an ordered top-level array. Legacy `tokenEnv`,
 `routing`, `caCertificate`, and `caPrivateKey` fields are no longer accepted.
+The configuration version remains `1`.
+
+The [example configuration](config.example.json) shows all three source forms;
+replace its paths and helper command with your own sources.
 
 ## Temporary command sidecar
 
@@ -106,12 +160,15 @@ a configured credential hint explicitly, use:
 ./gh-router exec -config config.json -hint related -- gh api graphql ...
 ```
 
-The executor removes the configured real-token variables and known ambient
-GitHub token variables from the command environment. The sidecar writes only
-its public CA certificate to the temporary path in `SSL_CERT_FILE`; an
-ephemeral CA private key remains in sidecar memory and is never written to
-disk. The public certificate and its temporary directory are removed when the
-command exits.
+The executor removes configured token environment variables, known ambient GitHub
+token variables, and variables equal to GitHub tokens loaded from the environment.
+File and command GitHub sources are acquired lazily in the sidecar, so aliases of
+those token values in arbitrary inherited environment variables cannot be detected
+at launch. Their values are never added to the launched command's environment.
+
+Proxy authentication is obtained once by the executor and sent to the sidecar
+through a private inherited pipe, so a command source does not run twice. The
+launched command receives the same authentication token through `GH_TOKEN`.
 
 This mode is intended to wrap a trusted sandbox launcher. The sandbox must be
 able to reach the host loopback proxy, read the temporary public CA file, and

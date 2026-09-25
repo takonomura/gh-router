@@ -2,6 +2,7 @@ package ghrouter
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -39,8 +40,8 @@ type runtimeRoute struct {
 }
 
 type runtimeCredential struct {
-	id    string
-	token string
+	id       string
+	provider *tokenProvider
 }
 
 type Selection struct {
@@ -78,7 +79,7 @@ func NewRouter(cfg *Config) *Router {
 		router.routes = append(router.routes, runtimeRoute)
 	}
 	for _, credential := range cfg.Credentials {
-		router.credentials[credential.ID] = runtimeCredential{id: credential.ID, token: credential.token}
+		router.credentials[credential.ID] = runtimeCredential{id: credential.ID, provider: newTokenProvider(credential.TokenFrom, credential.token)}
 		for _, hint := range credential.Hints {
 			router.hints[hint] = credential.ID
 		}
@@ -95,8 +96,20 @@ func (r *Router) Select(req *http.Request, host string) (Selection, error) {
 	if err != nil {
 		return Selection{}, err
 	}
+	// Hints choose a credential, but do not bypass the supported-host/protocol boundary.
+	var gitTarget routeTarget
+	switch host {
+	case apiGitHubHost:
+	case gitHubHost:
+		gitTarget, err = extractGitTarget(req)
+	default:
+		err = newRequestError(http.StatusForbidden, "host_denied", nil)
+	}
+	if err != nil {
+		return Selection{}, err
+	}
 	if !automatic {
-		return r.selection(credentialID, "hint"), nil
+		return r.selection(req.Context(), credentialID, "hint")
 	}
 
 	var targets []routeTarget
@@ -108,13 +121,7 @@ func (r *Router) Select(req *http.Request, host string) (Selection, error) {
 			targets, err = extractRESTTargets(req)
 		}
 	case gitHubHost:
-		var target routeTarget
-		target, err = extractGitTarget(req)
-		if err == nil {
-			targets = []routeTarget{target}
-		}
-	default:
-		err = newRequestError(http.StatusForbidden, "host_denied", nil)
+		targets = []routeTarget{gitTarget}
 	}
 	if err != nil {
 		return Selection{}, err
@@ -124,7 +131,7 @@ func (r *Router) Select(req *http.Request, host string) (Selection, error) {
 	if err != nil {
 		return Selection{}, err
 	}
-	return r.selection(credentialID, target), nil
+	return r.selection(req.Context(), credentialID, target)
 }
 
 func (r *Router) authenticate(values []string) (credentialID string, automatic bool, err error) {
@@ -238,9 +245,13 @@ func (r *Router) routeTarget(target routeTarget) string {
 	return ""
 }
 
-func (r *Router) selection(credentialID, target string) Selection {
+func (r *Router) selection(ctx context.Context, credentialID, target string) (Selection, error) {
 	credential := r.credentials[credentialID]
-	return Selection{CredentialID: credential.id, Token: credential.token, Target: target}
+	token, err := credential.provider.get(ctx)
+	if err != nil {
+		return Selection{}, newRequestError(http.StatusServiceUnavailable, "credential_unavailable", nil)
+	}
+	return Selection{CredentialID: credential.id, Token: token, Target: target}, nil
 }
 
 type routeTarget struct {

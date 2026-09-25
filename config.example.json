@@ -22,6 +22,12 @@
       "credential": "related-read"
     },
     {
+      "when": {
+        "owner": "partner"
+      },
+      "credential": "partner-read"
+    },
+    {
       "credential": "main"
     }
   ],
@@ -38,11 +44,28 @@
     {
       "id": "related-read",
       "tokenFrom": {
-        "env": "GH_ROUTER_TOKEN_RELATED"
+        "file": "./secrets/related-token"
       },
       "hints": [
         "related",
         "related-read"
+      ]
+    },
+    {
+      "id": "partner-read",
+      "tokenFrom": {
+        "command": {
+          "argv": [
+            "token-helper",
+            "get",
+            "partner"
+          ],
+          "cacheTTL": "5m",
+          "timeout": "30s"
+        }
+      },
+      "hints": [
+        "partner"
       ]
     }
   ]

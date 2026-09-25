@@ -32,22 +32,26 @@ func clientCredential(cfg *Config, hint string) (string, error) {
 
 func commandEnvironment(base []string, cfg *Config, credential, proxyURL, caCertificate string) []string {
 	removedNames := map[string]bool{
-		cfg.Authentication.TokenFrom.Env: true,
-		"GH_TOKEN":                       true,
-		"GITHUB_TOKEN":                   true,
-		"GH_ENTERPRISE_TOKEN":            true,
-		"GITHUB_ENTERPRISE_TOKEN":        true,
-		"HTTPS_PROXY":                    true,
-		"HTTP_PROXY":                     true,
-		"NO_PROXY":                       true,
-		"https_proxy":                    true,
-		"http_proxy":                     true,
-		"no_proxy":                       true,
-		"SSL_CERT_FILE":                  true,
-		"GH_HOST":                        true,
+		"GH_TOKEN":                true,
+		"GITHUB_TOKEN":            true,
+		"GH_ENTERPRISE_TOKEN":     true,
+		"GITHUB_ENTERPRISE_TOKEN": true,
+		"HTTPS_PROXY":             true,
+		"HTTP_PROXY":              true,
+		"NO_PROXY":                true,
+		"https_proxy":             true,
+		"http_proxy":              true,
+		"no_proxy":                true,
+		"SSL_CERT_FILE":           true,
+		"GH_HOST":                 true,
+	}
+	if name := cfg.Authentication.TokenFrom.Env; name != nil {
+		removedNames[*name] = true
 	}
 	for _, configuredCredential := range cfg.Credentials {
-		removedNames[configuredCredential.TokenFrom.Env] = true
+		if name := configuredCredential.TokenFrom.Env; name != nil {
+			removedNames[*name] = true
+		}
 	}
 
 	environment := make([]string, 0, len(base)+9)

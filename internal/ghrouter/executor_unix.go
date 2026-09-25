@@ -44,6 +44,14 @@ func ExecCommand(configPath, hint string, command []string) error {
 	}
 	defer readyReader.Close()
 
+	authenticationReader, authenticationWriter, err := os.Pipe()
+	if err != nil {
+		readyWriter.Close()
+		return fmt.Errorf("exec: create authentication pipe: %w", err)
+	}
+	defer authenticationReader.Close()
+	defer authenticationWriter.Close()
+
 	self, err := os.Executable()
 	if err != nil {
 		readyWriter.Close()
@@ -55,7 +63,7 @@ func ExecCommand(configPath, hint string, command []string) error {
 		"-parent-pid", strconv.Itoa(os.Getpid()),
 	)
 	sidecar.Env = os.Environ()
-	sidecar.ExtraFiles = []*os.File{readyWriter}
+	sidecar.ExtraFiles = []*os.File{readyWriter, authenticationReader}
 	sidecar.Stderr = os.Stderr
 	sidecar.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := sidecar.Start(); err != nil {
@@ -63,6 +71,14 @@ func ExecCommand(configPath, hint string, command []string) error {
 		return fmt.Errorf("exec: start sidecar: %w", err)
 	}
 	readyWriter.Close()
+	authenticationReader.Close()
+	// The readiness deadline also bounds a stalled transfer to the sidecar.
+	transferred := make(chan error, 1)
+	go func() {
+		_, err := io.WriteString(authenticationWriter, cfg.Authentication.token)
+		authenticationWriter.Close()
+		transferred <- err
+	}()
 
 	ready, err := waitForSidecarReady(readyReader)
 	if err != nil {
@@ -72,6 +88,10 @@ func ExecCommand(configPath, hint string, command []string) error {
 	if err := validateReady(ready); err != nil {
 		stopSidecar(sidecar)
 		return fmt.Errorf("exec: sidecar startup: %w", err)
+	}
+	if err := <-transferred; err != nil {
+		stopSidecar(sidecar)
+		return errors.New("exec: transfer proxy authentication failed")
 	}
 	if err := readyReader.Close(); err != nil {
 		stopSidecar(sidecar)

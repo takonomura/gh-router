@@ -1,6 +1,7 @@
 package ghrouter
 
 import (
+	"bytes"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -254,4 +255,56 @@ func newTestCA(t *testing.T) (*certificateAuthority, *x509.CertPool) {
 		signer:      privateKey,
 		cache:       make(map[string]*tls.Certificate),
 	}, roots
+}
+
+func TestProxyDynamicCredentialsAndSafeFailures(t *testing.T) {
+	source := helperTokenSource(t, "print", "fresh-secret")
+	cfg := testConfig()
+	cfg.Credentials[0].token = ""
+	cfg.Credentials[0].TokenFrom = source
+	var logs bytes.Buffer
+	proxy, err := NewProxy(cfg, slog.New(slog.NewTextHandler(&logs, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	proxy.transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		calls++
+		if req.Header.Get("Authorization") != "Bearer fresh-secret" {
+			t.Error("incorrect upstream credential")
+		}
+		return &http.Response{StatusCode: http.StatusForbidden, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(""))}, nil
+	})
+	request := func(host, path, authorization string, want int) {
+		t.Helper()
+		req := httptest.NewRequest("GET", "https://"+host+path, nil)
+		req.URL.Scheme, req.URL.Host = "", ""
+		req.Header.Set("Authorization", authorization)
+		w := httptest.NewRecorder()
+		proxy.handleGitHubRequest(w, req, host)
+		if w.Code != want {
+			t.Fatalf("status = %d, want %d", w.Code, want)
+		}
+		for _, value := range []string{"fresh-secret", "private-output", "private-error"} {
+			if strings.Contains(w.Body.String(), value) || strings.Contains(logs.String(), value) {
+				t.Fatal("secret leaked in response or logs")
+			}
+		}
+	}
+	request(apiGitHubHost, "/user", "Bearer client-secret", 403)
+	// A changed helper must not run after GitHub rejects the cached token.
+	source.Command.Argv = helperTokenSource(t, "fail").Command.Argv
+	request(apiGitHubHost, "/user", "Bearer client-secret:main", 403)
+	if calls != 2 {
+		t.Fatal("unexpected retry or credential fallback")
+	}
+	provider := proxy.router.credentials["main"].provider
+	provider.mu.Lock()
+	provider.expires = time.Time{}
+	provider.mu.Unlock()
+	request(apiGitHubHost, "/user", "Bearer client-secret", 503)
+	if calls != 2 {
+		t.Fatal("forwarded request after credential acquisition failure")
+	}
+	request(gitHubHost, "/login", "Bearer client-secret:main", 403)
 }

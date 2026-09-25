@@ -23,6 +23,9 @@ const testCLIMode = "GH_ROUTER_TEST_CLI"
 
 func TestMain(m *testing.M) {
 	if os.Getenv(testCLIMode) == "1" {
+		if len(os.Args) > 1 && strings.HasPrefix(os.Args[1], "__test_token_") {
+			os.Exit(runExecTokenTestHelper())
+		}
 		if err := run(os.Args[1:]); err != nil {
 			fmt.Fprintf(os.Stderr, "gh-router: %v\n", err)
 			os.Exit(1)

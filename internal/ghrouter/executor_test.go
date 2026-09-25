@@ -21,10 +21,10 @@ func TestClientCredential(t *testing.T) {
 
 func TestCommandEnvironmentIsolatesGitHubTokens(t *testing.T) {
 	cfg := testConfig()
-	cfg.Authentication.TokenFrom.Env = "TEST_CLIENT_TOKEN"
-	cfg.Credentials[0].TokenFrom.Env = "TEST_MAIN_TOKEN"
-	cfg.Credentials[1].TokenFrom.Env = "TEST_RELATED_TOKEN"
-	cfg.Credentials[2].TokenFrom.Env = "TEST_PARTNER_TOKEN"
+	cfg.Authentication.TokenFrom.Env = testString("TEST_CLIENT_TOKEN")
+	cfg.Credentials[0].TokenFrom.Env = testString("TEST_MAIN_TOKEN")
+	cfg.Credentials[1].TokenFrom.Env = testString("TEST_RELATED_TOKEN")
+	cfg.Credentials[2].TokenFrom.Env = testString("TEST_PARTNER_TOKEN")
 
 	environment := commandEnvironment([]string{
 		"PATH=/usr/bin",
@@ -94,3 +94,5 @@ func TestExecutablePathRejectsEmptyCommand(t *testing.T) {
 		t.Fatalf("executablePath(test binary) = %q, %v", path, err)
 	}
 }
+
+func testString(s string) *string { return &s }

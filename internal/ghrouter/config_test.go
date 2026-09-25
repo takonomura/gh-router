@@ -1,6 +1,8 @@
 package ghrouter
 
 import (
+	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -218,4 +220,131 @@ func writeTestConfig(t *testing.T, content string) string {
 		t.Fatal(err)
 	}
 	return path
+}
+
+func writeSourceConfig(t *testing.T, authentication TokenSource, source TokenSource) string {
+	t.Helper()
+	cfg := Config{
+		Version:        1,
+		Authentication: AuthenticationConfig{TokenFrom: authentication},
+		Routes:         []RouteConfig{{Credential: "main"}},
+		Credentials:    []Credential{{ID: "main", TokenFrom: source}},
+	}
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return writeTestConfig(t, string(data))
+}
+
+func TestLoadConfigFileAuthenticationIsFixed(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(path, []byte("first\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	source := TokenSource{File: &path}
+	cfg, err := LoadConfig(writeSourceConfig(t, source, source))
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := NewRouter(cfg)
+	if err := os.WriteFile(path, []byte("second\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	req := newRouterRequest(t, "GET", "/user", "")
+	req.Header.Set("Authorization", "Bearer first")
+	selection, err := router.Select(req, apiGitHubHost)
+	if err != nil || selection.Token != "second" {
+		t.Fatalf("fixed authentication / refreshed credential: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer second")
+	if _, err := router.Select(req, apiGitHubHost); err == nil {
+		t.Fatal("authentication changed after startup")
+	}
+}
+
+func TestLoadConfigCommandAuthentication(t *testing.T) {
+	t.Setenv("TEST_GITHUB_TOKEN", "github-token")
+	for _, test := range []struct {
+		mode, value string
+		fail        bool
+	}{
+		{"print", "client-token\n", false},
+		{"print", "client:hint", true},
+		{"print", "private token", true},
+		{"fail", "", true},
+	} {
+		source := helperTokenSource(t, test.mode, test.value)
+		cfg, err := LoadConfig(writeSourceConfig(t, source, TokenSource{Env: testString("TEST_GITHUB_TOKEN")}))
+		if (err != nil) != test.fail {
+			t.Fatalf("authentication %s: %v", test.mode, err)
+		}
+		if !test.fail && cfg.Authentication.token != "client-token" {
+			t.Fatal("command authentication not loaded")
+		}
+		if err != nil && (strings.Contains(err.Error(), "private-output") || strings.Contains(err.Error(), "private-error")) {
+			t.Fatal("authentication error leaked output")
+		}
+	}
+}
+
+func TestLoadConfigValidatesBeforeAcquiringTokens(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), "called")
+	source := helperTokenSource(t, "touch", marker)
+	path := writeSourceConfig(t, source, source)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data = bytes.Replace(data, []byte(`"credential":"main"`), []byte(`"credential":"missing"`), 1)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadConfig(path); err == nil {
+		t.Fatal("accepted missing route credential")
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatal("ran helper before structural validation")
+	}
+}
+
+func TestLoadConfigLazyCredentialsAndMissingAuthentication(t *testing.T) {
+	t.Setenv("TEST_CLIENT_TOKEN", "client-secret")
+	missing := TokenSource{File: testString(filepath.Join(t.TempDir(), "missing"))}
+	auth := TokenSource{Env: testString("TEST_CLIENT_TOKEN")}
+	if _, err := LoadConfig(writeSourceConfig(t, auth, missing)); err != nil {
+		t.Fatalf("loaded lazy file: %v", err)
+	}
+	if _, err := LoadConfig(writeSourceConfig(t, missing, auth)); err == nil {
+		t.Fatal("missing authentication accepted")
+	}
+	source := helperTokenSource(t, "fail")
+	if _, err := LoadConfig(writeSourceConfig(t, auth, source)); err != nil {
+		t.Fatalf("ran lazy command: %v", err)
+	}
+}
+
+func TestLoadConfigRejectsInvalidTokenSourceInBothLocations(t *testing.T) {
+	t.Setenv("TEST_CLIENT_TOKEN", "client-secret")
+	valid := TokenSource{Env: testString("TEST_CLIENT_TOKEN")}
+	invalid := TokenSource{Env: testString("TEST_CLIENT_TOKEN"), File: testString("token")}
+	for _, sources := range [][2]TokenSource{{valid, invalid}, {invalid, valid}} {
+		if _, err := LoadConfig(writeSourceConfig(t, sources[0], sources[1])); err == nil {
+			t.Fatal("accepted conflicting sources")
+		}
+	}
+}
+
+func TestLoadConfigEnvTokenIsFixed(t *testing.T) {
+	t.Setenv("TEST_CLIENT_TOKEN", "client-secret")
+	t.Setenv("TEST_GITHUB_TOKEN", "first")
+	cfg, err := LoadConfig(writeSourceConfig(t, TokenSource{Env: testString("TEST_CLIENT_TOKEN")}, TokenSource{Env: testString("TEST_GITHUB_TOKEN")}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TEST_GITHUB_TOKEN", "second")
+	selection, err := NewRouter(cfg).Select(newRouterRequest(t, "GET", "/user", ""), apiGitHubHost)
+	if err != nil || selection.Token != "first" {
+		t.Fatalf("environment token changed: %v", err)
+	}
 }

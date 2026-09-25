@@ -125,12 +125,45 @@ P-256 の CA 鍵と自己署名証明書をメモリ上で生成する。秘密�
 
 `GH_ROUTER_TOKEN_*` は proxy process にだけ渡す。サンドボックスには渡さない。production の設定ファイルへ token value を直接書かない。
 
-`authentication.tokenFrom.env` が指す値は GitHub credential とは別の proxy access token であり、proxy process と利用を許可する sandbox の双方に渡す。token 単体は自動 routing、`token:hint` は明示 routing として解釈する。`credentials[].hints` は秘匿情報ではなく、hint を持たない credential は明示選択できない。どの hint を選んでも、GitHub で実行できる範囲は対応する Fine-grained PAT の scope を超えない。
+`authentication.tokenFrom` で取得する値は GitHub credential とは別の proxy access token であり、proxy process と利用を許可する sandbox の双方に渡す。token 単体は自動 routing、`token:hint` は明示 routing として解釈する。`credentials[].hints` は秘匿情報ではなく、hint を持たない credential は明示選択できない。どの hint を選んでも、GitHub で実行できる範囲は対応する Fine-grained PAT の scope を超えない。
 
 `server` または `server.listen` の省略時は `127.0.0.1:8080` を使う。
 設定内の相対ファイル path は設定ファイルの directory を基準に解決する。
 `server.ca` 指定時は `certificateFile` と `privateKeyFile` を両方必須とする。
 旧形式の `tokenEnv`、`routing`、CA の旧 field は受け付けない。
+
+### Token の取得元と更新
+
+`authentication.tokenFrom` と `credentials[].tokenFrom` は共通の型と取得処理を使う。
+`env`、`file`、`command` のいずれか一つを必須とする。
+
+```json
+{"env": "GH_ROUTER_TOKEN"}
+{"file": "./secrets/github-token"}
+{"command": {"argv": ["token-helper", "get", "github"], "cacheTTL": "5m", "timeout": "30s"}}
+```
+
+上記は個別の取得元の例である。全設定の構造検証を終えてから token を取得する。
+
+- proxy access token は取得元にかかわらず起動時に一度取得し、終了まで固定する。
+  取得失敗時は起動しない。command の TTL による認証値の更新は行わない。
+- GitHub の env token は起動時に読む。file は認証と route 選択後、選択されるたびに読む。
+- GitHub の command は初回選択時に実行し、成功時から TTL の間、credential ごとに
+  memory cache へ保持する。期限後の最初の request で更新する。
+- 同じ credential の同時取得は一回にまとめて結果を共有する。待機 request の
+  cancel は共有 command を止めず、command 自身の timeout で制限する。
+- cache は process 内だけに保持し、先行更新や永続化は行わない。
+- GitHub token の取得失敗は `503 credential_unavailable` とし、upstream へ送らない。
+  期限切れ値は使わず、次の request で再取得する。GitHub の拒否による再取得・再送はしない。
+
+command は argv を直接実行し、設定ファイルの directory を作業 directory とする。
+proxy の環境を継承し、stdin/stderr は null device とする。shell が必要なら
+`sh -c` を明示する。cacheTTL と timeout は正の Go duration で、
+省略時はそれぞれ 5 分と 30 秒とする。command の引数・出力・取得値を error/log へ含めない。
+
+file と stdout の上限は前後空白を含め 64 KiB とし、前後空白・改行を除去する。
+空値、内部の空白・制御文字、不正な UTF-8 は拒否する。env は前後空白も拒否する。
+token の値を設定 JSON に直接記述する形式は用意しない。
 
 ### 設定時の確認
 
@@ -140,7 +173,7 @@ P-256 の CA 鍵と自己署名証明書をメモリ上で生成する。秘密�
 - 条件なし route は省略可能とし、定義する場合は一つだけ末尾に置く。
 - main token は main repository だけを選択し、必要最小限の write permissions にする。
 - related owner の token は必要な repository だけを選択し、read-only permissions にする。
-- token には有効期限を設定し、rotation はまず手動運用とする。
+- GitHub token の有効期限より短い command cacheTTL を選ぶ。GitHub token の file 差し替えは次の request へ反映する。
 
 route の定義は token scope と一致させるが、MVP では GitHub API を使った scope の自動検証は行わない。
 
@@ -242,8 +275,15 @@ GH_HOST = github.com
 GH_TOKEN = proxy access token と任意の :hint
 ```
 
-実 token を指す設定済み環境変数、同じ実 token value を持つ環境変数、および
-既知の ambient GitHub token 環境変数は command の環境から除く。hint を明示
+設定済みの token 環境変数、起動時に環境から取得した実 token と同じ値を持つ環境変数、
+および既知の ambient GitHub token 環境変数は command の環境から除く。
+file/command の GitHub token は sidecar 内で遅延取得するため、その値と同じ任意の
+環境変数を起動時に検出することはできない。取得値を起動対象の環境へ追加しない。
+
+proxy access token は executor が一度取得し、専用の継承 pipe で sidecar へ渡す。
+sidecar はその値を固定して使い、取得 command を再実行しない。内部転送では
+引数・環境変数に載せず、起動対象 command には既存どおり GH_TOKEN で渡す。
+hint を明示
 する場合は、設定済みの値だけを `-hint` に指定できる。
 
 ```sh

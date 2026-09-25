@@ -37,10 +37,6 @@ type AuthenticationConfig struct {
 	token     string
 }
 
-type TokenSource struct {
-	Env string `json:"env,omitempty"`
-}
-
 type RouteConfig struct {
 	When       *RouteCondition `json:"when,omitempty"`
 	Credential string          `json:"credential"`
@@ -59,6 +55,11 @@ type Credential struct {
 }
 
 func LoadConfig(path string) (*Config, error) {
+	return loadConfig(path, nil)
+}
+
+// authenticationOverride is supplied only through the executor's private pipe.
+func loadConfig(path string, authenticationOverride *string) (*Config, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("open config: %w", err)
@@ -75,15 +76,18 @@ func LoadConfig(path string) (*Config, error) {
 	if err := ensureJSONEOF(dec); err != nil {
 		return nil, err
 	}
+	base, err := filepath.Abs(filepath.Dir(path))
+	if err != nil {
+		return nil, fmt.Errorf("resolve config directory: %w", err)
+	}
 	if cfg.Server.CA != nil {
-		base, err := filepath.Abs(filepath.Dir(path))
-		if err != nil {
-			return nil, fmt.Errorf("resolve config directory: %w", err)
-		}
 		cfg.Server.CA.CertificateFile = resolveConfigPath(base, cfg.Server.CA.CertificateFile)
 		cfg.Server.CA.PrivateKeyFile = resolveConfigPath(base, cfg.Server.CA.PrivateKeyFile)
 	}
-	if err := cfg.validateAndLoadTokens(); err != nil {
+	if err := cfg.validate(base); err != nil {
+		return nil, err
+	}
+	if err := cfg.loadTokens(authenticationOverride); err != nil {
 		return nil, err
 	}
 	return &cfg, nil
@@ -101,7 +105,7 @@ func ensureJSONEOF(dec *json.Decoder) error {
 	return fmt.Errorf("decode config: %w", err)
 }
 
-func (cfg *Config) validateAndLoadTokens() error {
+func (cfg *Config) validate(directory string) error {
 	if cfg.Version != 1 {
 		return fmt.Errorf("config: unsupported version %d", cfg.Version)
 	}
@@ -112,32 +116,25 @@ func (cfg *Config) validateAndLoadTokens() error {
 		return errors.New("config: server CA certificate and private key must be specified together")
 	}
 
-	clientToken, err := loadTokenEnvironment(cfg.Authentication.TokenFrom.Env, "authentication.tokenFrom.env")
-	if err != nil {
-		return err
+	if err := cfg.Authentication.TokenFrom.validate(directory); err != nil {
+		return tokenSourceError("authentication.tokenFrom", err)
 	}
-	if strings.Contains(clientToken, ":") {
-		return errors.New("config: proxy access token must not contain ':'")
-	}
-	cfg.Authentication.token = clientToken
 
 	credentialIDs := make(map[string]bool)
 	seenHints := make(map[string]bool)
 	for i := range cfg.Credentials {
 		credential := &cfg.Credentials[i]
-		if credential.ID == "" || credential.TokenFrom.Env == "" {
-			return fmt.Errorf("config: credentials[%d] requires id and tokenFrom.env", i)
+		if credential.ID == "" {
+			return fmt.Errorf("config: credentials[%d] requires id", i)
 		}
 		if credentialIDs[credential.ID] {
 			return fmt.Errorf("config: duplicate credential %q", credential.ID)
 		}
 		credentialIDs[credential.ID] = true
 
-		token, err := loadTokenEnvironment(credential.TokenFrom.Env, fmt.Sprintf("credentials[%d].tokenFrom.env", i))
-		if err != nil {
-			return err
+		if err := credential.TokenFrom.validate(directory); err != nil {
+			return tokenSourceError(fmt.Sprintf("credentials[%d].tokenFrom", i), err)
 		}
-		credential.token = token
 
 		for j, hint := range credential.Hints {
 			if hint == "" || hint != strings.TrimSpace(hint) {
@@ -198,18 +195,33 @@ func (cfg *Config) validateAndLoadTokens() error {
 	return nil
 }
 
-func loadTokenEnvironment(name, field string) (string, error) {
-	if strings.TrimSpace(name) == "" {
-		return "", fmt.Errorf("config: %s is required", field)
+func (cfg *Config) loadTokens(authenticationOverride *string) error {
+	var token string
+	var err error
+	if authenticationOverride != nil {
+		token, err = validateToken(*authenticationOverride)
+	} else {
+		token, err = cfg.Authentication.TokenFrom.read()
 	}
-	token, ok := os.LookupEnv(name)
-	if !ok || strings.TrimSpace(token) == "" {
-		return "", fmt.Errorf("config: environment variable %s is empty or unset", name)
+	if err != nil {
+		return tokenSourceError("authentication.tokenFrom", err)
 	}
-	if token != strings.TrimSpace(token) {
-		return "", fmt.Errorf("config: environment variable %s contains surrounding whitespace", name)
+	if strings.Contains(token, ":") {
+		return errors.New("config: proxy access token must not contain ':'")
 	}
-	return token, nil
+	cfg.Authentication.token = token
+	for i := range cfg.Credentials {
+		credential := &cfg.Credentials[i]
+		if credential.TokenFrom.Env == nil {
+			continue
+		}
+		token, err := credential.TokenFrom.read()
+		if err != nil {
+			return tokenSourceError(fmt.Sprintf("credentials[%d].tokenFrom", i), err)
+		}
+		credential.token = token
+	}
+	return nil
 }
 
 func secureTokenEqual(left, right string) bool {

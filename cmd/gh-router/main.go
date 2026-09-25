@@ -128,5 +128,10 @@ func runSidecar(args []string) error {
 		return errors.New("sidecar readiness pipe is unavailable")
 	}
 	defer ready.Close()
-	return ghrouter.RunSidecar(*configPath, *parentPID, ready)
+	authentication := os.NewFile(uintptr(4), "gh-router-authentication")
+	if authentication == nil {
+		return errors.New("executor authentication pipe is unavailable")
+	}
+	defer authentication.Close()
+	return ghrouter.RunSidecar(*configPath, *parentPID, ready, authentication)
 }

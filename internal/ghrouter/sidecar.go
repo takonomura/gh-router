@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"log/slog"
 	"net"
@@ -20,9 +21,9 @@ import (
 
 const parentPollInterval = 250 * time.Millisecond
 
-func RunSidecar(configPath string, parentPID int, ready *os.File) error {
+func RunSidecar(configPath string, parentPID int, ready, authentication *os.File) error {
 	readyReported := false
-	if err := runSidecar(configPath, parentPID, ready, &readyReported); err != nil {
+	if err := runSidecar(configPath, parentPID, ready, authentication, &readyReported); err != nil {
 		if readyReported {
 			return err
 		}
@@ -34,9 +35,15 @@ func RunSidecar(configPath string, parentPID int, ready *os.File) error {
 	return nil
 }
 
-func runSidecar(configPath string, parentPID int, ready *os.File, readyReported *bool) error {
+func runSidecar(configPath string, parentPID int, ready, authentication *os.File, readyReported *bool) error {
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	cfg, err := LoadConfig(configPath)
+	data, err := io.ReadAll(io.LimitReader(authentication, maxTokenSize+1))
+	authentication.Close()
+	if err != nil || len(data) > maxTokenSize {
+		return errors.New("invalid executor authentication")
+	}
+	token := string(data)
+	cfg, err := loadConfig(configPath, &token)
 	if err != nil {
 		return err
 	}
