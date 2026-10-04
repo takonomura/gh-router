@@ -271,6 +271,22 @@ func extractRESTTargets(req *http.Request) ([]routeTarget, error) {
 	if err != nil {
 		return nil, err
 	}
+	if len(segments) == 2 && segments[0] == "search" {
+		switch segments[1] {
+		case "code", "commits", "issues", "repositories":
+			query := req.URL.Query()["q"]
+			if len(query) > 1 {
+				return nil, malformedSearch("multiple search queries")
+			}
+			targets := make(map[string]routeTarget)
+			if len(query) == 1 {
+				if err := addSearchTargets(targets, query[0]); err != nil {
+					return nil, err
+				}
+			}
+			return targetList(targets), nil
+		}
+	}
 	if len(segments) >= 3 && segments[0] == "repos" {
 		repository, ok := canonicalRepository(segments[1] + "/" + segments[2])
 		if !ok {
@@ -317,6 +333,9 @@ func extractGraphQLTargets(req *http.Request) ([]routeTarget, error) {
 	}
 
 	targets := make(map[string]routeTarget)
+	if err := addGraphQLSearchTargets(targets, payload.Query, payload.Variables); err != nil {
+		return nil, err
+	}
 	owner, ownerOK := jsonString(payload.Variables["owner"])
 	if ownerOK {
 		if repository, ok := firstJSONString(payload.Variables, "repo", "name"); ok {
@@ -338,11 +357,7 @@ func extractGraphQLTargets(req *http.Request) ([]routeTarget, error) {
 		return nil, newRequestError(http.StatusBadRequest, "malformed_graphql", errors.New("too many routing targets"))
 	}
 
-	result := make([]routeTarget, 0, len(targets))
-	for _, target := range targets {
-		result = append(result, target)
-	}
-	return result, nil
+	return targetList(targets), nil
 }
 
 func jsonString(raw json.RawMessage) (string, bool) {

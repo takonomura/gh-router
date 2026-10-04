@@ -45,12 +45,13 @@ Without a hint, the proxy extracts targets from these request forms:
 
 | Protocol | Target extraction |
 | --- | --- |
-| REST | Repository from `/repos/{owner}/{repo}/...`; owner from `/orgs/{owner}/...` or `/users/{owner}/...` |
-| GraphQL | Recognized owner/repository variables and repository, organization, or user literals in the JSON body |
+| REST | Repository from `/repos/{owner}/{repo}/...`; owner from `/orgs/{owner}/...` or `/users/{owner}/...`; `repo:`, `org:`, or `user:` qualifiers from `q` on REST search endpoints |
+| GraphQL | Recognized owner/repository variables and repository, organization, or user literals in the JSON body; search qualifiers from `search(query: ...)` literals or referenced JSON variables |
 | Git | Repository from smart HTTP discovery, upload-pack, and receive-pack paths |
 
-GraphQL extraction is best-effort, not a complete document parser. Requests such
-as node-ID-only mutations may need a hint or an unconditional route.
+GraphQL and search extraction are best-effort, not complete document or search
+expression parsers. Requests such as node-ID-only mutations may need a hint or
+an unconditional route.
 
 For each extracted target, routes are evaluated in configuration order with
 case-insensitive owner/repository matching. There is no implicit preference for
