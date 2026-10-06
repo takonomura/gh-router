@@ -299,7 +299,7 @@ func TestRouterDoesNotReadTokensForRejectedRequests(t *testing.T) {
 	}
 	for _, req := range []*http.Request{
 		newRouterRequest(t, "GET", "/user", ""),
-		newRouterRequest(t, "POST", "/graphql", `{"query":"query { repository(owner:\"acme\", name:\"main\"){id} repository(owner:\"partner\", name:\"other\"){id} }"}`),
+		newRouterRequest(t, "POST", "/graphql", `{"query":"query { repository(owner:\"octocat\", name:\"main\"){id} repository(owner:\"monalisa\", name:\"other\"){id} }"}`),
 	} {
 		if req.URL.Path == "/user" {
 			req.Header.Set("Authorization", "Bearer unknown")

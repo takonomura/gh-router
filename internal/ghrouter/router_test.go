@@ -26,18 +26,18 @@ func TestRouterSelectsCredential(t *testing.T) {
 			name:       "exact repository route wins",
 			host:       "api.github.com",
 			method:     http.MethodGet,
-			path:       "/repos/acme/main/pulls",
+			path:       "/repos/octocat/main/pulls",
 			auth:       "token client-secret",
 			credential: "main",
-			target:     "acme/main",
+			target:     "octocat/main",
 		},
 		{
 			name:       "owner route",
 			host:       "api.github.com",
 			method:     http.MethodGet,
-			path:       "/repos/RELATED/example",
+			path:       "/repos/OCTO-ORG/example",
 			credential: "related-read",
-			target:     "related/example",
+			target:     "octo-org/example",
 		},
 		{
 			name:       "explicit hint wins",
@@ -62,27 +62,27 @@ func TestRouterSelectsCredential(t *testing.T) {
 			host:       "api.github.com",
 			method:     http.MethodPost,
 			path:       "/graphql",
-			body:       `{"query":"query($owner:String!,$repo:String!){repository(owner:$owner,name:$repo){id}}","variables":{"owner":"related","repo":"private"}}`,
+			body:       `{"query":"query($owner:String!,$repo:String!){repository(owner:$owner,name:$repo){id}}","variables":{"owner":"octo-org","repo":"private"}}`,
 			auth:       "token client-secret",
 			credential: "related-read",
-			target:     "related/private",
+			target:     "octo-org/private",
 		},
 		{
 			name:       "GraphQL literal",
 			host:       "api.github.com",
 			method:     http.MethodPost,
 			path:       "/graphql",
-			body:       `{"query":"query { repository(owner: \"partner\", name: \"private\") { id } }"}`,
+			body:       `{"query":"query { repository(owner: \"monalisa\", name: \"private\") { id } }"}`,
 			credential: "partner-read",
-			target:     "partner/private",
+			target:     "monalisa/private",
 		},
 		{
 			name:       "Git smart HTTP",
 			host:       "github.com",
 			method:     http.MethodPost,
-			path:       "/related/example.git/git-upload-pack",
+			path:       "/octo-org/example.git/git-upload-pack",
 			credential: "related-read",
-			target:     "related/example",
+			target:     "octo-org/example",
 		},
 		{
 			name:       "Basic hint",
@@ -161,14 +161,14 @@ func TestRouterRejectsUnsafeOrAmbiguousRequests(t *testing.T) {
 			host:   "api.github.com",
 			method: http.MethodPost,
 			path:   "/graphql",
-			body:   `{"query":"query { a: repository(owner: \"related\", name: \"one\") { id } b: repository(owner: \"partner\", name: \"two\") { id } }"}`,
+			body:   `{"query":"query { a: repository(owner: \"octo-org\", name: \"one\") { id } b: repository(owner: \"monalisa\", name: \"two\") { id } }"}`,
 			code:   "ambiguous_route",
 		},
 		{
 			name:   "non Git github.com path",
 			host:   "github.com",
 			method: http.MethodGet,
-			path:   "/acme/main",
+			path:   "/octocat/main",
 			code:   "unsupported_request",
 		},
 	}
@@ -196,7 +196,7 @@ func TestRouterRejectsUnsafeOrAmbiguousRequests(t *testing.T) {
 
 func TestGraphQLBodyIsRestored(t *testing.T) {
 	router := NewRouter(testConfig())
-	body := `{"query":"query($owner:String!,$repo:String!){repository(owner:$owner,name:$repo){id}}","variables":{"owner":"related","repo":"private"}}`
+	body := `{"query":"query($owner:String!,$repo:String!){repository(owner:$owner,name:$repo){id}}","variables":{"owner":"octo-org","repo":"private"}}`
 	req := newRouterRequest(t, http.MethodPost, "/graphql", body)
 
 	if _, err := router.Select(req, "api.github.com"); err != nil {
@@ -239,12 +239,12 @@ func TestRouterRejectsMissingAuthentication(t *testing.T) {
 func TestRouterEvaluatesRoutesInOrder(t *testing.T) {
 	cfg := testConfig()
 	cfg.Routes = []RouteConfig{
-		{When: &RouteCondition{Owner: "acme"}, Credential: "related-read"},
-		{When: &RouteCondition{Repository: "acme/main"}, Credential: "main"},
+		{When: &RouteCondition{Owner: "octocat"}, Credential: "related-read"},
+		{When: &RouteCondition{Repository: "octocat/main"}, Credential: "main"},
 		{Credential: "main"},
 	}
 	router := NewRouter(cfg)
-	req := newRouterRequest(t, http.MethodGet, "/repos/acme/main", "")
+	req := newRouterRequest(t, http.MethodGet, "/repos/octocat/main", "")
 
 	selection, err := router.Select(req, "api.github.com")
 	if err != nil {
@@ -273,9 +273,9 @@ func testConfig() *Config {
 	return &Config{
 		Authentication: AuthenticationConfig{token: "client-secret"},
 		Routes: []RouteConfig{
-			{When: &RouteCondition{Repository: "acme/main"}, Credential: "main"},
-			{When: &RouteCondition{Owner: "related"}, Credential: "related-read"},
-			{When: &RouteCondition{Owner: "partner"}, Credential: "partner-read"},
+			{When: &RouteCondition{Repository: "octocat/main"}, Credential: "main"},
+			{When: &RouteCondition{Owner: "octo-org"}, Credential: "related-read"},
+			{When: &RouteCondition{Owner: "monalisa"}, Credential: "partner-read"},
 			{Credential: "main"},
 		},
 		Credentials: []Credential{

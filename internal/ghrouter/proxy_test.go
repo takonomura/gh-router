@@ -97,7 +97,7 @@ func TestProxyCONNECTReplacesAuthorization(t *testing.T) {
 		proxyServer.Close()
 	})
 
-	req, err := http.NewRequest(http.MethodGet, "https://api.github.com/repos/acme/main", nil)
+	req, err := http.NewRequest(http.MethodGet, "https://api.github.com/repos/octocat/main", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -175,7 +175,7 @@ func TestProxyRejectsUnsupportedCONNECTHost(t *testing.T) {
 }
 
 func TestBuildUpstreamGitRequestUsesBasicAuth(t *testing.T) {
-	req := newRouterRequest(t, http.MethodPost, "/acme/main.git/git-receive-pack", "pack")
+	req := newRouterRequest(t, http.MethodPost, "/octocat/main.git/git-receive-pack", "pack")
 	req.Header.Set("Authorization", "token client-secret")
 	req.Header.Set("Cookie", "must-not-pass=true")
 

@@ -30,27 +30,27 @@ func TestGHCommandRoutingE2E(t *testing.T) {
 	}{
 		{
 			name:           "exact repository route",
-			repository:     "acme/main",
-			response:       `{"data":{"repository":{"nameWithOwner":"acme/main"}}}`,
-			wantOutput:     "acme/main",
+			repository:     "octocat/main",
+			response:       `{"data":{"repository":{"nameWithOwner":"octocat/main"}}}`,
+			wantOutput:     "octocat/main",
 			wantToken:      "main-secret",
-			wantRepository: "acme/main",
+			wantRepository: "octocat/main",
 		},
 		{
 			name:           "owner route",
-			repository:     "related/library",
-			response:       `{"data":{"repository":{"nameWithOwner":"related/library"}}}`,
-			wantOutput:     "related/library",
+			repository:     "octo-org/library",
+			response:       `{"data":{"repository":{"nameWithOwner":"octo-org/library"}}}`,
+			wantOutput:     "octo-org/library",
 			wantToken:      "related-secret",
-			wantRepository: "related/library",
+			wantRepository: "octo-org/library",
 		},
 		{
 			name:           "unconditional route",
-			repository:     "public/example",
-			response:       `{"data":{"repository":{"nameWithOwner":"public/example"}}}`,
-			wantOutput:     "public/example",
+			repository:     "octocat/example",
+			response:       `{"data":{"repository":{"nameWithOwner":"octocat/example"}}}`,
+			wantOutput:     "octocat/example",
 			wantToken:      "main-secret",
-			wantRepository: "public/example",
+			wantRepository: "octocat/example",
 		},
 	}
 
@@ -83,7 +83,7 @@ func TestGHCommandRoutingE2E(t *testing.T) {
 
 	t.Run("pr list uses owner route", func(t *testing.T) {
 		observed := runGHCommand(t, gh, "client-secret", `{"data":{"repository":{"pullRequests":{"nodes":[]}}}}`,
-			"pr", "list", "--repo", "related/library", "--limit", "1", "--json", "number")
+			"pr", "list", "--repo", "octo-org/library", "--limit", "1", "--json", "number")
 		if got := strings.TrimSpace(observed.output); got != "[]" {
 			t.Fatalf("gh output = %q", got)
 		}
@@ -92,7 +92,7 @@ func TestGHCommandRoutingE2E(t *testing.T) {
 
 	t.Run("issue list uses exact route", func(t *testing.T) {
 		observed := runGHCommand(t, gh, "client-secret", `{"data":{"repository":{"hasIssuesEnabled":true,"issues":{"nodes":[]}}}}`,
-			"issue", "list", "--repo", "acme/main", "--limit", "1", "--json", "number")
+			"issue", "list", "--repo", "octocat/main", "--limit", "1", "--json", "number")
 		if got := strings.TrimSpace(observed.output); got != "[]" {
 			t.Fatalf("gh output = %q", got)
 		}
@@ -108,9 +108,9 @@ func TestGHAPICommandRoutingE2E(t *testing.T) {
 		repository string
 		token      string
 	}{
-		{name: "REST exact route", repository: "acme/main", token: "main-secret"},
-		{name: "REST owner route", repository: "related/library", token: "related-secret"},
-		{name: "REST unconditional route", repository: "public/example", token: "main-secret"},
+		{name: "REST exact route", repository: "octocat/main", token: "main-secret"},
+		{name: "REST owner route", repository: "octo-org/library", token: "related-secret"},
+		{name: "REST unconditional route", repository: "octocat/example", token: "main-secret"},
 	}
 	for _, test := range restTests {
 		t.Run(test.name, func(t *testing.T) {
@@ -126,20 +126,20 @@ func TestGHAPICommandRoutingE2E(t *testing.T) {
 
 	t.Run("GraphQL variables", func(t *testing.T) {
 		query := `query($owner:String!,$repo:String!){repository(owner:$owner,name:$repo){nameWithOwner}}`
-		observed := runGHCommand(t, gh, "client-secret", `{"data":{"repository":{"nameWithOwner":"partner/project"}}}`,
-			"api", "graphql", "-f", "query="+query, "-F", "owner=partner", "-F", "repo=project",
+		observed := runGHCommand(t, gh, "client-secret", `{"data":{"repository":{"nameWithOwner":"monalisa/project"}}}`,
+			"api", "graphql", "-f", "query="+query, "-F", "owner=monalisa", "-F", "repo=project",
 			"--jq", ".data.repository.nameWithOwner")
-		if got := strings.TrimSpace(observed.output); got != "partner/project" {
+		if got := strings.TrimSpace(observed.output); got != "monalisa/project" {
 			t.Fatalf("gh output = %q", got)
 		}
 		assertSingleUpstreamAuthorization(t, observed.requests, "/graphql", "Bearer partner-secret")
 	})
 
 	t.Run("GraphQL literal", func(t *testing.T) {
-		query := `query { repository(owner:"related",name:"library") { nameWithOwner } }`
-		observed := runGHCommand(t, gh, "client-secret", `{"data":{"repository":{"nameWithOwner":"related/library"}}}`,
+		query := `query { repository(owner:"octo-org",name:"library") { nameWithOwner } }`
+		observed := runGHCommand(t, gh, "client-secret", `{"data":{"repository":{"nameWithOwner":"octo-org/library"}}}`,
 			"api", "graphql", "-f", "query="+query, "--jq", ".data.repository.nameWithOwner")
-		if got := strings.TrimSpace(observed.output); got != "related/library" {
+		if got := strings.TrimSpace(observed.output); got != "octo-org/library" {
 			t.Fatalf("gh output = %q", got)
 		}
 		assertSingleUpstreamAuthorization(t, observed.requests, "/graphql", "Bearer related-secret")
@@ -166,7 +166,7 @@ func TestGHAPICommandRoutingE2E(t *testing.T) {
 	})
 
 	t.Run("ambiguous GraphQL route is rejected", func(t *testing.T) {
-		query := `query { a: repository(owner:"related",name:"one") { id } b: repository(owner:"partner",name:"two") { id } }`
+		query := `query { a: repository(owner:"octo-org",name:"one") { id } b: repository(owner:"monalisa",name:"two") { id } }`
 		observed := runGHCommandResult(t, gh, "client-secret", `{"data":{}}`,
 			"api", "graphql", "-f", "query="+query)
 		if observed.err == nil {
@@ -187,9 +187,9 @@ func TestGitSmartHTTPRoutingE2E(t *testing.T) {
 		repository string
 		token      string
 	}{
-		{name: "exact repository route", repository: "acme/main", token: "main-secret"},
-		{name: "owner route", repository: "related/library", token: "related-secret"},
-		{name: "unconditional route", repository: "public/example", token: "main-secret"},
+		{name: "exact repository route", repository: "octocat/main", token: "main-secret"},
+		{name: "owner route", repository: "octo-org/library", token: "related-secret"},
+		{name: "unconditional route", repository: "octocat/example", token: "main-secret"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -232,17 +232,17 @@ func TestGHSearchRoutingE2E(t *testing.T) {
 		name, path, token, qualifier string
 		args                         []string
 	}{
-		{name: "code repo", path: "/search/code", token: "related-secret", qualifier: "repo:related/library", args: []string{"search", "code", "panic", "--repo", "related/library", "--json", "path"}},
-		{name: "commits repo", path: "/search/commits", token: "related-secret", qualifier: "repo:related/library", args: []string{"search", "commits", "fix", "--repo", "related/library", "--json", "sha"}},
-		{name: "issues repo", path: "/search/issues", token: "related-secret", qualifier: "repo:related/library", args: []string{"search", "issues", "bug", "--repo", "related/library", "--json", "number"}},
-		{name: "issues NOT label", path: "/search/issues", token: "related-secret", qualifier: "NOT label:bug", args: []string{"search", "issues", "NOT", "label:bug", "--repo", "related/library", "--json", "number"}},
-		{name: "prs repo", path: "/search/issues", token: "partner-secret", qualifier: "repo:partner/library", args: []string{"search", "prs", "fix", "--repo", "partner/library", "--json", "number"}},
-		{name: "repos owner", path: "/search/repositories", token: "partner-secret", qualifier: "user:partner", args: []string{"search", "repos", "--owner", "partner", "--json", "fullName"}},
-		{name: "code owner", path: "/search/code", token: "related-secret", qualifier: "user:related", args: []string{"search", "code", "panic", "--owner", "related", "--json", "path"}},
-		{name: "raw qualifier", path: "/search/issues", token: "related-secret", qualifier: "repo:related/library", args: []string{"search", "issues", "repo:related/library", "--json", "number"}},
-		{name: "unfinished other qualifier", path: "/search/issues", token: "related-secret", qualifier: `label:"bug`, args: []string{"api", "--method", "GET", "search/issues", "-f", `q=repo:related/library label:"bug`, "--jq", ".items"}},
-		{name: "multiple repos", path: "/search/issues", token: "related-secret", qualifier: "repo:related/two", args: []string{"search", "issues", "--repo", "related/one", "--repo", "related/two", "--json", "number"}},
-		{name: "exact repository", path: "/search/code", token: "main-secret", qualifier: "repo:acme/main", args: []string{"search", "code", "panic", "--repo", "acme/main", "--json", "path"}},
+		{name: "code repo", path: "/search/code", token: "related-secret", qualifier: "repo:octo-org/library", args: []string{"search", "code", "panic", "--repo", "octo-org/library", "--json", "path"}},
+		{name: "commits repo", path: "/search/commits", token: "related-secret", qualifier: "repo:octo-org/library", args: []string{"search", "commits", "fix", "--repo", "octo-org/library", "--json", "sha"}},
+		{name: "issues repo", path: "/search/issues", token: "related-secret", qualifier: "repo:octo-org/library", args: []string{"search", "issues", "bug", "--repo", "octo-org/library", "--json", "number"}},
+		{name: "issues NOT label", path: "/search/issues", token: "related-secret", qualifier: "NOT label:bug", args: []string{"search", "issues", "NOT", "label:bug", "--repo", "octo-org/library", "--json", "number"}},
+		{name: "prs repo", path: "/search/issues", token: "partner-secret", qualifier: "repo:monalisa/library", args: []string{"search", "prs", "fix", "--repo", "monalisa/library", "--json", "number"}},
+		{name: "repos owner", path: "/search/repositories", token: "partner-secret", qualifier: "user:monalisa", args: []string{"search", "repos", "--owner", "monalisa", "--json", "fullName"}},
+		{name: "code owner", path: "/search/code", token: "related-secret", qualifier: "user:octo-org", args: []string{"search", "code", "panic", "--owner", "octo-org", "--json", "path"}},
+		{name: "raw qualifier", path: "/search/issues", token: "related-secret", qualifier: "repo:octo-org/library", args: []string{"search", "issues", "repo:octo-org/library", "--json", "number"}},
+		{name: "unfinished other qualifier", path: "/search/issues", token: "related-secret", qualifier: `label:"bug`, args: []string{"api", "--method", "GET", "search/issues", "-f", `q=repo:octo-org/library label:"bug`, "--jq", ".items"}},
+		{name: "multiple repos", path: "/search/issues", token: "related-secret", qualifier: "repo:octo-org/two", args: []string{"search", "issues", "--repo", "octo-org/one", "--repo", "octo-org/two", "--json", "number"}},
+		{name: "exact repository", path: "/search/code", token: "main-secret", qualifier: "repo:octocat/main", args: []string{"search", "code", "panic", "--repo", "octocat/main", "--json", "path"}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -269,7 +269,7 @@ func TestGHSearchRoutingE2E(t *testing.T) {
 				}
 				return `{"data":{"search":{"issueCount":0,"nodes":[],"pageInfo":{"hasNextPage":false}}},"total_count":0,"items":[]}`
 			},
-				command, "list", "--repo", "related/library", "--search", "bug", "--json", "number")
+				command, "list", "--repo", "octo-org/library", "--search", "bug", "--json", "number")
 			if observed.err != nil {
 				t.Fatalf("gh failed: %v\n%s", observed.err, observed.output)
 			}
@@ -293,12 +293,12 @@ func TestGHSearchRoutingE2E(t *testing.T) {
 	}
 	t.Run("GraphQL search variable", func(t *testing.T) {
 		observed := runGHCommand(t, gh, "client-secret", `{"data":{"search":{"issueCount":0}}}`,
-			"api", "graphql", "-f", "query=query($filter:String!){search(query:$filter,type:ISSUE){issueCount nodes{__typename}}}", "-f", "filter=repo:partner/library NOT label:bug", "--jq", ".data.search.issueCount")
+			"api", "graphql", "-f", "query=query($filter:String!){search(query:$filter,type:ISSUE){issueCount nodes{__typename}}}", "-f", "filter=repo:monalisa/library NOT label:bug", "--jq", ".data.search.issueCount")
 		assertSingleUpstreamAuthorization(t, searchE2ERequests(t, observed.requests), "/graphql", "Bearer partner-secret")
 	})
 	for name, query := range map[string]string{
-		"default search variable": `query($q:String!="repo:related/library"){repository(owner:"related",name:"library"){id} search(query:$q,type:ISSUE){issueCount}}`,
-		"block search string":     `{repository(owner:"related",name:"library"){id} search(query:"""repo:related/library""",type:ISSUE){issueCount}}`,
+		"default search variable": `query($q:String!="repo:octo-org/library"){repository(owner:"octo-org",name:"library"){id} search(query:$q,type:ISSUE){issueCount}}`,
+		"block search string":     `{repository(owner:"octo-org",name:"library"){id} search(query:"""repo:octo-org/library""",type:ISSUE){issueCount}}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			observed := runGHCommand(t, gh, "client-secret", `{"data":{"search":{"issueCount":0},"repository":{"id":"test"}}}`,
@@ -306,7 +306,7 @@ func TestGHSearchRoutingE2E(t *testing.T) {
 			assertSingleUpstreamAuthorization(t, observed.requests, "/graphql", "Bearer related-secret")
 		})
 	}
-	for _, query := range []string{"repo:related/one repo:partner/two", "repo:invalid", "repo:related/one NOT repo:partner/two"} {
+	for _, query := range []string{"repo:octo-org/one repo:monalisa/two", "repo:invalid", "repo:octo-org/one NOT repo:monalisa/two"} {
 		t.Run("reject REST "+query, func(t *testing.T) {
 			observed := runGHCommandResult(t, gh, "client-secret", `{"items":[]}`,
 				"search", "issues", query, "--json", "number")

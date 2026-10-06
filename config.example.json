@@ -11,19 +11,19 @@
   "routes": [
     {
       "when": {
-        "repository": "acme/main"
+        "repository": "octocat/main"
       },
       "credential": "main"
     },
     {
       "when": {
-        "owner": "acme-related"
+        "owner": "octo-org"
       },
       "credential": "related-read"
     },
     {
       "when": {
-        "owner": "partner"
+        "owner": "monalisa"
       },
       "credential": "partner-read"
     },

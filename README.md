@@ -28,8 +28,8 @@ On the host, save this as `config.json`, replacing the repository and owner name
     "tokenFrom": {"env": "GH_ROUTER_CLIENT_TOKEN"}
   },
   "routes": [
-    {"when": {"repository": "acme/main"}, "credential": "main"},
-    {"when": {"owner": "partner"}, "credential": "partner-read"},
+    {"when": {"repository": "octocat/main"}, "credential": "main"},
+    {"when": {"owner": "monalisa"}, "credential": "partner-read"},
     {"credential": "main"}
   ],
   "credentials": [
@@ -83,8 +83,8 @@ export GH_TOKEN='a-separate-random-client-secret'
 git config --global http.https://github.com/.extraHeader \
   "Authorization: Basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')"
 
-gh repo view acme/main
-git clone https://github.com/acme/main.git
+gh repo view octocat/main
+git clone https://github.com/octocat/main.git
 ```
 
 By default, the proxy generates an in-memory CA valid for 24 hours. Download its
@@ -97,7 +97,7 @@ certificate through an authenticated channel. Keep the CA private key on the hos
 On Unix-like systems, `exec` runs a proxy for the lifetime of one command:
 
 ```sh
-./gh-router exec -config config.json -- gh repo view acme/main
+./gh-router exec -config config.json -- gh repo view octocat/main
 ```
 
 It uses an automatically assigned loopback port, sets the proxy variables,

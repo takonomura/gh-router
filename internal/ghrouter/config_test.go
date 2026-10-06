@@ -21,8 +21,8 @@ func TestLoadConfig(t *testing.T) {
   },
   "authentication": {"tokenFrom": {"env": "TEST_CLIENT_TOKEN"}},
   "routes": [
-    {"when": {"repository": "Acme/Main"}, "credential": "main"},
-    {"when": {"owner": "Related"}, "credential": "read"},
+    {"when": {"repository": "Octocat/Main"}, "credential": "main"},
+    {"when": {"owner": "Octo-Org"}, "credential": "read"},
     {"credential": "main"}
   ],
   "credentials": [
@@ -38,7 +38,7 @@ func TestLoadConfig(t *testing.T) {
 	if cfg.Authentication.token != "client-secret" {
 		t.Fatal("proxy access token was not loaded from the environment")
 	}
-	if cfg.Routes[0].When.Repository != "acme/main" || cfg.Routes[1].When.Owner != "related" {
+	if cfg.Routes[0].When.Repository != "octocat/main" || cfg.Routes[1].When.Owner != "octo-org" {
 		t.Fatalf("routes were not canonicalized: %#v", cfg.Routes)
 	}
 	if cfg.Routes[2].When != nil {
@@ -144,7 +144,7 @@ func TestLoadConfigRejectsInvalidInput(t *testing.T) {
   "version": 1,
   "server": {"listen": ":8080"},
   "authentication": {"tokenFrom": {"env": "TEST_CLIENT_TOKEN"}},
-  "routes": [{"when": {"owner": "acme"}, "credential": "missing"}],
+  "routes": [{"when": {"owner": "octocat"}, "credential": "missing"}],
   "credentials": [{"id": "main", "tokenFrom": {"env": "TEST_TOKEN"}}]
 }`,
 			want: "unknown credential",
@@ -157,7 +157,7 @@ func TestLoadConfigRejectsInvalidInput(t *testing.T) {
   "authentication": {"tokenFrom": {"env": "TEST_CLIENT_TOKEN"}},
   "routes": [
     {"credential": "main"},
-    {"when": {"owner": "acme"}, "credential": "main"}
+    {"when": {"owner": "octocat"}, "credential": "main"}
   ],
   "credentials": [{"id": "main", "tokenFrom": {"env": "TEST_TOKEN"}}]
 }`,
@@ -170,7 +170,7 @@ func TestLoadConfigRejectsInvalidInput(t *testing.T) {
   "server": {"listen": ":8080"},
   "authentication": {"tokenFrom": {"env": "TEST_CLIENT_TOKEN"}},
   "routes": [
-    {"when": {"repository": "acme/main", "owner": "acme"}, "credential": "main"}
+    {"when": {"repository": "octocat/main", "owner": "octocat"}, "credential": "main"}
   ],
   "credentials": [{"id": "main", "tokenFrom": {"env": "TEST_TOKEN"}}]
 }`,

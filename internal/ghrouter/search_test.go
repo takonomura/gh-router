@@ -15,44 +15,44 @@ func TestSearchRouting(t *testing.T) {
 	tests := []struct {
 		name, query, credential, target, code string
 	}{
-		{name: "repository", query: "bug repo:acme/main", credential: "main", target: "acme/main"},
-		{name: "owner through repository", query: "repo:RELATED/library", credential: "related-read", target: "related/library"},
-		{name: "org", query: "org:related", credential: "related-read", target: "related"},
-		{name: "user", query: "user:partner", credential: "partner-read", target: "partner"},
-		{name: "quoted values", query: `repo:"related/library"`, credential: "related-read", target: "related/library"},
-		{name: "quoted owner", query: `user:"RELATED"`, credential: "related-read", target: "related"},
-		{name: "duplicate", query: "repo:related/library repo:RELATED/LIBRARY", credential: "related-read", target: "related/library"},
-		{name: "same credential", query: "(repo:related/one OR repo:related/two) AND label:bug", credential: "related-read", target: "related/one,related/two"},
-		{name: "whitespace", query: "bug\t repo:related/one\n\u3000repo:related/two", credential: "related-read", target: "related/one,related/two"},
-		{name: "different credentials", query: "repo:related/one repo:partner/two", code: "ambiguous_route"},
-		{name: "mixed repository and owner", query: "repo:related/one org:partner", code: "ambiguous_route"},
-		{name: "unconditional", query: "bug author:related", credential: "main", target: "unconditional"},
-		{name: "unconditional repository", query: "repo:public/example", credential: "main", target: "public/example"},
+		{name: "repository", query: "bug repo:octocat/main", credential: "main", target: "octocat/main"},
+		{name: "owner through repository", query: "repo:OCTO-ORG/library", credential: "related-read", target: "octo-org/library"},
+		{name: "org", query: "org:octo-org", credential: "related-read", target: "octo-org"},
+		{name: "user", query: "user:monalisa", credential: "partner-read", target: "monalisa"},
+		{name: "quoted values", query: `repo:"octo-org/library"`, credential: "related-read", target: "octo-org/library"},
+		{name: "quoted owner", query: `user:"OCTO-ORG"`, credential: "related-read", target: "octo-org"},
+		{name: "duplicate", query: "repo:octo-org/library repo:OCTO-ORG/LIBRARY", credential: "related-read", target: "octo-org/library"},
+		{name: "same credential", query: "(repo:octo-org/one OR repo:octo-org/two) AND label:bug", credential: "related-read", target: "octo-org/one,octo-org/two"},
+		{name: "whitespace", query: "bug\t repo:octo-org/one\n\u3000repo:octo-org/two", credential: "related-read", target: "octo-org/one,octo-org/two"},
+		{name: "different credentials", query: "repo:octo-org/one repo:monalisa/two", code: "ambiguous_route"},
+		{name: "mixed repository and owner", query: "repo:octo-org/one org:monalisa", code: "ambiguous_route"},
+		{name: "unconditional", query: "bug author:octo-org", credential: "main", target: "unconditional"},
+		{name: "unconditional repository", query: "repo:octocat/example", credential: "main", target: "octocat/example"},
 		{name: "empty", credential: "main", target: "unconditional"},
-		{name: "quoted keyword", query: `"repo:partner/private" repo:related/one`, credential: "related-read", target: "related/one"},
-		{name: "quoted other qualifier", query: `label:"repo:partner/private" repo:related/one`, credential: "related-read", target: "related/one"},
-		{name: "escaped quotes", query: `"say \"repo:partner/private\"" repo:related/one`, credential: "related-read", target: "related/one"},
-		{name: "excluded targets", query: "-repo:partner/private -org:partner -user:partner repo:related/one", credential: "related-read", target: "related/one"},
-		{name: "only exclusion", query: "-repo:partner/private", credential: "main", target: "unconditional"},
-		{name: "NOT unrelated qualifier", query: "repo:related/one NOT label:bug", credential: "related-read", target: "related/one"},
+		{name: "quoted keyword", query: `"repo:monalisa/private" repo:octo-org/one`, credential: "related-read", target: "octo-org/one"},
+		{name: "quoted other qualifier", query: `label:"repo:monalisa/private" repo:octo-org/one`, credential: "related-read", target: "octo-org/one"},
+		{name: "escaped quotes", query: `"say \"repo:monalisa/private\"" repo:octo-org/one`, credential: "related-read", target: "octo-org/one"},
+		{name: "excluded targets", query: "-repo:monalisa/private -org:monalisa -user:monalisa repo:octo-org/one", credential: "related-read", target: "octo-org/one"},
+		{name: "only exclusion", query: "-repo:monalisa/private", credential: "main", target: "unconditional"},
+		{name: "NOT unrelated qualifier", query: "repo:octo-org/one NOT label:bug", credential: "related-read", target: "octo-org/one"},
 		{name: "NOT without target", query: "NOT label:bug", credential: "main", target: "unconditional"},
-		{name: "NOT ignored for repository", query: "NOT repo:partner/two", credential: "partner-read", target: "partner/two"},
-		{name: "NOT target conflict", query: "repo:related/one NOT repo:partner/two", code: "ambiguous_route"},
-		{name: "unrelated excluded group", query: "repo:related/one -(label:bug)", credential: "related-read", target: "related/one"},
-		{name: "excluded group target conflict", query: "repo:related/one -(repo:partner/two)", code: "ambiguous_route"},
-		{name: "quoted NOT", query: `"NOT" repo:related/one`, credential: "related-read", target: "related/one"},
-		{name: "unfinished other qualifier", query: `repo:related/one label:"bug`, credential: "related-read", target: "related/one"},
-		{name: "unfinished quoted text", query: `repo:related/one "bug`, credential: "related-read", target: "related/one"},
-		{name: "unfinished excluded qualifier", query: `repo:related/one -repo:"partner/two`, credential: "related-read", target: "related/one"},
+		{name: "NOT ignored for repository", query: "NOT repo:monalisa/two", credential: "partner-read", target: "monalisa/two"},
+		{name: "NOT target conflict", query: "repo:octo-org/one NOT repo:monalisa/two", code: "ambiguous_route"},
+		{name: "unrelated excluded group", query: "repo:octo-org/one -(label:bug)", credential: "related-read", target: "octo-org/one"},
+		{name: "excluded group target conflict", query: "repo:octo-org/one -(repo:monalisa/two)", code: "ambiguous_route"},
+		{name: "quoted NOT", query: `"NOT" repo:octo-org/one`, credential: "related-read", target: "octo-org/one"},
+		{name: "unfinished other qualifier", query: `repo:octo-org/one label:"bug`, credential: "related-read", target: "octo-org/one"},
+		{name: "unfinished quoted text", query: `repo:octo-org/one "bug`, credential: "related-read", target: "octo-org/one"},
+		{name: "unfinished excluded qualifier", query: `repo:octo-org/one -repo:"monalisa/two`, credential: "related-read", target: "octo-org/one"},
 		{name: "unfinished text without target", query: `label:"bug`, credential: "main", target: "unconditional"},
-		{name: "invalid repo", query: "repo:related", code: "malformed_search"},
-		{name: "invalid owner", query: "org:related/library", code: "malformed_search"},
+		{name: "invalid repo", query: "repo:octo-org", code: "malformed_search"},
+		{name: "invalid owner", query: "org:octo-org/library", code: "malformed_search"},
 		{name: "empty repo", query: "repo:", code: "malformed_search"},
 		{name: "empty owner", query: `user:""`, code: "malformed_search"},
-		{name: "truncated quote", query: `repo:"related/one`, code: "malformed_search"},
-		{name: "truncated escape", query: `repo:"related/one\`, code: "malformed_search"},
-		{name: "truncated owner", query: `org:"related`, code: "malformed_search"},
-		{name: "trailing quoted text", query: `repo:"related/one"suffix`, code: "malformed_search"},
+		{name: "truncated quote", query: `repo:"octo-org/one`, code: "malformed_search"},
+		{name: "truncated escape", query: `repo:"octo-org/one\`, code: "malformed_search"},
+		{name: "truncated owner", query: `org:"octo-org`, code: "malformed_search"},
+		{name: "trailing quoted text", query: `repo:"octo-org/one"suffix`, code: "malformed_search"},
 	}
 	for _, test := range tests {
 		for _, protocol := range []string{"REST", "GraphQL"} {
@@ -96,30 +96,30 @@ func TestGraphQLSearchRouting(t *testing.T) {
 		name, query, credential, code string
 		variables                     map[string]any
 	}{
-		{name: "literal", query: `{search(query:"repo:related/one",type:ISSUE){issueCount}}`, credential: "related-read"},
-		{name: "alias and reordered arguments", query: `{results:search(type:ISSUE,first:1,query:$filter){issueCount}}`, variables: map[string]any{"filter": "repo:partner/one", "other": "repo:related/one"}, credential: "partner-read"},
-		{name: "multiple searches", query: `{a:search(query:"repo:related/one",type:ISSUE){issueCount} b:search(query:"repo:related/two",type:ISSUE){issueCount}}`, credential: "related-read"},
-		{name: "conflicting searches", query: `{a:search(query:"repo:related/one",type:ISSUE){issueCount} b:search(query:"repo:partner/two",type:ISSUE){issueCount}}`, code: "ambiguous_route"},
-		{name: "existing target conflict", query: `{repository(owner:"acme",name:"main"){id} search(query:"repo:related/one",type:ISSUE){issueCount}}`, code: "ambiguous_route"},
-		{name: "comment", query: "# search(query:\"repo:partner/one\")\n{search(query:\"repo:related/one\",type:ISSUE){issueCount}}", credential: "related-read"},
-		{name: "CR comment", query: "# search(query:\"repo:partner/one\")\r{search(query:\"repo:related/one\",type:ISSUE){issueCount}}", credential: "related-read"},
-		{name: "unrelated string", query: `{something(value:"search(query: repo:partner/one)"){id} search(query:"repo:related/one",type:ISSUE){issueCount}}`, credential: "related-read"},
-		{name: "unused variable", query: `{viewer{login}}`, variables: map[string]any{"search": "repo:partner/one"}, credential: "main"},
-		{name: "unrelated block string", query: `{something(value:"""search(query:repo:partner/one)"""){id}}`, credential: "main"},
+		{name: "literal", query: `{search(query:"repo:octo-org/one",type:ISSUE){issueCount}}`, credential: "related-read"},
+		{name: "alias and reordered arguments", query: `{results:search(type:ISSUE,first:1,query:$filter){issueCount}}`, variables: map[string]any{"filter": "repo:monalisa/one", "other": "repo:octo-org/one"}, credential: "partner-read"},
+		{name: "multiple searches", query: `{a:search(query:"repo:octo-org/one",type:ISSUE){issueCount} b:search(query:"repo:octo-org/two",type:ISSUE){issueCount}}`, credential: "related-read"},
+		{name: "conflicting searches", query: `{a:search(query:"repo:octo-org/one",type:ISSUE){issueCount} b:search(query:"repo:monalisa/two",type:ISSUE){issueCount}}`, code: "ambiguous_route"},
+		{name: "existing target conflict", query: `{repository(owner:"octocat",name:"main"){id} search(query:"repo:octo-org/one",type:ISSUE){issueCount}}`, code: "ambiguous_route"},
+		{name: "comment", query: "# search(query:\"repo:monalisa/one\")\n{search(query:\"repo:octo-org/one\",type:ISSUE){issueCount}}", credential: "related-read"},
+		{name: "CR comment", query: "# search(query:\"repo:monalisa/one\")\r{search(query:\"repo:octo-org/one\",type:ISSUE){issueCount}}", credential: "related-read"},
+		{name: "unrelated string", query: `{something(value:"search(query: repo:monalisa/one)"){id} search(query:"repo:octo-org/one",type:ISSUE){issueCount}}`, credential: "related-read"},
+		{name: "unused variable", query: `{viewer{login}}`, variables: map[string]any{"search": "repo:monalisa/one"}, credential: "main"},
+		{name: "unrelated block string", query: `{something(value:"""search(query:repo:monalisa/one)"""){id}}`, credential: "main"},
 		{name: "missing variable", query: `{search(query:$filter,type:ISSUE){issueCount}}`, credential: "main"},
 		{name: "null variable", query: `{search(query:$filter,type:ISSUE){issueCount}}`, variables: map[string]any{"filter": nil}, credential: "main"},
 		{name: "non-string variable", query: `{search(query:$filter,type:ISSUE){issueCount}}`, variables: map[string]any{"filter": 42}, credential: "main"},
 		{name: "empty variable", query: `{search(query:$filter,type:ISSUE){issueCount}}`, variables: map[string]any{"filter": ""}, credential: "main"},
 		{name: "missing query", query: `{search(type:ISSUE){issueCount}}`, credential: "main"},
-		{name: "duplicate query targets", query: `{search(query:"repo:related/one",query:"repo:partner/two"){issueCount}}`, code: "ambiguous_route"},
+		{name: "duplicate query targets", query: `{search(query:"repo:octo-org/one",query:"repo:monalisa/two"){issueCount}}`, code: "ambiguous_route"},
 		{name: "non-string query", query: `{search(query:42){issueCount}}`, credential: "main"},
-		{name: "default search with known repository", query: `query($filter:String!="repo:related/one"){repository(owner:"related",name:"one"){id} search(query:$filter,type:ISSUE){issueCount}}`, credential: "related-read"},
-		{name: "block search with known repository", query: `{repository(owner:"related",name:"one"){id} search(query:"""repo:related/one""",type:ISSUE){issueCount}}`, credential: "related-read"},
-		{name: "unknown search before known search", query: `{a:search(query:$missing,type:ISSUE){issueCount} b:search(query:"repo:partner/one",type:ISSUE){issueCount}}`, credential: "partner-read"},
-		{name: "unknown search after known search", query: `{a:search(query:"repo:partner/one",type:ISSUE){issueCount} b:search(query:$missing,type:ISSUE){issueCount}}`, credential: "partner-read"},
-		{name: "unknown nested search value", query: `{repository(owner:"related",name:"one"){id} search(query:{query:"repo:partner/two"},type:ISSUE){issueCount}}`, credential: "related-read"},
-		{name: "block query", query: `{search(query:"""repo:related/one"""){issueCount}}`, credential: "main"},
-		{name: "quoted variable name", query: `{search(query:$"filter"){issueCount}}`, variables: map[string]any{"filter": "repo:partner/one"}, credential: "main"},
+		{name: "default search with known repository", query: `query($filter:String!="repo:octo-org/one"){repository(owner:"octo-org",name:"one"){id} search(query:$filter,type:ISSUE){issueCount}}`, credential: "related-read"},
+		{name: "block search with known repository", query: `{repository(owner:"octo-org",name:"one"){id} search(query:"""repo:octo-org/one""",type:ISSUE){issueCount}}`, credential: "related-read"},
+		{name: "unknown search before known search", query: `{a:search(query:$missing,type:ISSUE){issueCount} b:search(query:"repo:monalisa/one",type:ISSUE){issueCount}}`, credential: "partner-read"},
+		{name: "unknown search after known search", query: `{a:search(query:"repo:monalisa/one",type:ISSUE){issueCount} b:search(query:$missing,type:ISSUE){issueCount}}`, credential: "partner-read"},
+		{name: "unknown nested search value", query: `{repository(owner:"octo-org",name:"one"){id} search(query:{query:"repo:monalisa/two"},type:ISSUE){issueCount}}`, credential: "related-read"},
+		{name: "block query", query: `{search(query:"""repo:octo-org/one"""){issueCount}}`, credential: "main"},
+		{name: "quoted variable name", query: `{search(query:$"filter"){issueCount}}`, variables: map[string]any{"filter": "repo:monalisa/one"}, credential: "main"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -137,7 +137,7 @@ func TestGraphQLSearchRouting(t *testing.T) {
 func TestSearchRoutingBoundaries(t *testing.T) {
 	for _, endpoint := range []string{"code", "commits", "issues", "repositories"} {
 		t.Run(endpoint, func(t *testing.T) {
-			req := newRouterRequest(t, http.MethodGet, "/search/"+endpoint+"?q=repo:related/one", "")
+			req := newRouterRequest(t, http.MethodGet, "/search/"+endpoint+"?q=repo:octo-org/one", "")
 			selection, err := NewRouter(testConfig()).Select(req, apiGitHubHost)
 			if err != nil || selection.CredentialID != "related-read" {
 				t.Fatalf("selection = %q, error = %v", selection.CredentialID, err)
@@ -160,14 +160,14 @@ func TestSearchRoutingBoundaries(t *testing.T) {
 			assertSearchError(t, err, "route_not_found")
 			var query strings.Builder
 			for i := 0; i < maxTargets; i++ {
-				fmt.Fprintf(&query, "repo:related/r%d ", i)
+				fmt.Fprintf(&query, "repo:octo-org/r%d ", i)
 			}
 			if _, err := NewRouter(cfg).Select(request(query.String()), apiGitHubHost); err != nil {
 				t.Fatal(err)
 			}
-			_, err = NewRouter(cfg).Select(request(query.String()+"repo:related/extra"), apiGitHubHost)
+			_, err = NewRouter(cfg).Select(request(query.String()+"repo:octo-org/extra"), apiGitHubHost)
 			assertSearchError(t, err, "malformed_search")
-			req := request("repo:related/one NOT repo:partner/two")
+			req := request("repo:octo-org/one NOT repo:monalisa/two")
 			req.Header.Set("Authorization", "Bearer client-secret:partner")
 			selection, err := NewRouter(cfg).Select(req, apiGitHubHost)
 			if err != nil || selection.CredentialID != "partner-read" || selection.Target != "hint" {
@@ -176,20 +176,20 @@ func TestSearchRoutingBoundaries(t *testing.T) {
 		})
 	}
 	t.Run("duplicate q", func(t *testing.T) {
-		req := newRouterRequest(t, http.MethodGet, "/search/issues?q=repo:related/one&q=repo:partner/two", "")
+		req := newRouterRequest(t, http.MethodGet, "/search/issues?q=repo:octo-org/one&q=repo:monalisa/two", "")
 		_, err := NewRouter(testConfig()).Select(req, apiGitHubHost)
 		assertSearchError(t, err, "malformed_search")
 	})
 	t.Run("unknown GraphQL source without unconditional route", func(t *testing.T) {
 		cfg := testConfig()
 		cfg.Routes = cfg.Routes[:len(cfg.Routes)-1]
-		query := `query($q:String!="repo:related/one"){search(query:$q,type:ISSUE){issueCount}}`
+		query := `query($q:String!="repo:octo-org/one"){search(query:$q,type:ISSUE){issueCount}}`
 		req := newRouterRequest(t, http.MethodPost, "/graphql", graphQLSearchBody(t, query, nil))
 		_, err := NewRouter(cfg).Select(req, apiGitHubHost)
 		assertSearchError(t, err, "route_not_found")
 	})
 	t.Run("unrelated endpoint", func(t *testing.T) {
-		req := newRouterRequest(t, http.MethodGet, "/user?q=repo:partner/one", "")
+		req := newRouterRequest(t, http.MethodGet, "/user?q=repo:monalisa/one", "")
 		selection, err := NewRouter(testConfig()).Select(req, apiGitHubHost)
 		if err != nil || selection.Target != "unconditional" {
 			t.Fatalf("selection = %q, error = %v", selection.Target, err)
