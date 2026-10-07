@@ -153,7 +153,12 @@ func (p *Proxy) validateConnectAuthority(authority string) (string, error) {
 }
 
 func isSupportedGitHubHost(host string) bool {
-	return host == apiGitHubHost || host == gitHubHost
+	return host == apiGitHubHost || host == gitHubHost || isGitHubContentHost(host)
+}
+
+func isGitHubContentHost(host string) bool {
+	const suffix = ".githubusercontent.com"
+	return len(host) > len(suffix) && strings.HasSuffix(host, suffix)
 }
 
 func (p *Proxy) serveTunnel(clientConn net.Conn, host string, certificate *tls.Certificate, connectRequestID string) {
@@ -205,7 +210,21 @@ func (p *Proxy) handleGitHubRequest(w http.ResponseWriter, req *http.Request, co
 		p.writeError(w, requestID, http.StatusBadRequest, "host_mismatch")
 		return
 	}
-	selection, err := p.router.Select(req, connectHost)
+	var selection Selection
+	if isGitHubContentHost(connectHost) {
+		if req.Method != http.MethodGet && req.Method != http.MethodHead {
+			w.Header().Set("Allow", "GET, HEAD")
+			p.writeError(w, requestID, http.StatusMethodNotAllowed, "download_method_required")
+			return
+		}
+		err = validateClientCredentialCarriers(req)
+		if err == nil && len(req.Header.Values("Authorization")) != 0 {
+			_, _, err = p.router.authenticate(req.Header.Values("Authorization"))
+		}
+		selection.Target = "download"
+	} else {
+		selection, err = p.router.Select(req, connectHost)
+	}
 	if err != nil {
 		requestErr := asRequestError(err)
 		p.logger.Warn("request rejected",
@@ -252,7 +271,7 @@ func (p *Proxy) handleGitHubRequest(w http.ResponseWriter, req *http.Request, co
 		"duration_ms", time.Since(started).Milliseconds(),
 	}
 	if copyErr != nil {
-		attributes = append(attributes, "error", copyErr)
+		attributes = append(attributes, "error_type", fmt.Sprintf("%T", copyErr))
 		p.logger.Warn("request completed with response copy error", attributes...)
 		return
 	}
@@ -282,9 +301,10 @@ func buildUpstreamRequest(req *http.Request, host, token string) *http.Request {
 	} {
 		upstreamRequest.Header.Del(header)
 	}
-	if host == apiGitHubHost {
+	switch host {
+	case apiGitHubHost:
 		upstreamRequest.Header.Set("Authorization", "Bearer "+token)
-	} else {
+	case gitHubHost:
 		upstreamRequest.SetBasicAuth("x-access-token", token)
 	}
 	return upstreamRequest

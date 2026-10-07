@@ -383,11 +383,12 @@ func TestE2EFeatureDetection(t *testing.T) {
 }
 
 type e2eRequest struct {
-	host          string
-	path          string
-	rawQuery      string
-	authorization string
-	body          string
+	host               string
+	path               string
+	rawQuery           string
+	authorization      string
+	proxyAuthorization string
+	body               string
 }
 
 type e2eResult struct {
@@ -412,8 +413,13 @@ func runGHCommandResult(t *testing.T, gh, hint, responseBody string, args ...str
 
 func runGHCommandResponding(t *testing.T, gh, hint string, respond func(e2eRequest) string, args ...string) e2eResult {
 	t.Helper()
+	return runGHCommandRespondingHTTP(t, gh, hint, e2eBodyResponse("application/json", respond), args...)
+}
+
+func runGHCommandRespondingHTTP(t *testing.T, gh, hint string, respond func(e2eRequest) *http.Response, args ...string) e2eResult {
+	t.Helper()
 	clientHome := t.TempDir()
-	return runProxiedCommandResponding(t, gh, args, []string{
+	return runProxiedCommandRespondingHTTP(t, gh, args, []string{
 		"GH_CONFIG_DIR=" + filepath.Join(clientHome, "config"),
 		"GH_HOST=github.com",
 		"GH_NO_UPDATE_NOTIFIER=1",
@@ -421,7 +427,7 @@ func runGHCommandResponding(t *testing.T, gh, hint string, respond func(e2eReque
 		"GH_TOKEN=" + hint,
 		"HOME=" + clientHome,
 		"XDG_STATE_HOME=" + filepath.Join(clientHome, "state"),
-	}, "application/json", respond)
+	}, respond)
 }
 
 func runProxiedCommandResult(t *testing.T, executable string, args, environment []string, contentType, responseBody string) e2eResult {
@@ -430,6 +436,21 @@ func runProxiedCommandResult(t *testing.T, executable string, args, environment 
 }
 
 func runProxiedCommandResponding(t *testing.T, executable string, args, environment []string, contentType string, respond func(e2eRequest) string) e2eResult {
+	t.Helper()
+	return runProxiedCommandRespondingHTTP(t, executable, args, environment, e2eBodyResponse(contentType, respond))
+}
+
+func e2eBodyResponse(contentType string, respond func(e2eRequest) string) func(e2eRequest) *http.Response {
+	return func(req e2eRequest) *http.Response {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{contentType}},
+			Body:       io.NopCloser(strings.NewReader(respond(req))),
+		}
+	}
+}
+
+func runProxiedCommandRespondingHTTP(t *testing.T, executable string, args, environment []string, respond func(e2eRequest) *http.Response) e2eResult {
 	t.Helper()
 
 	ca, _ := newTestCA(t)
@@ -451,20 +472,18 @@ func runProxiedCommandResponding(t *testing.T, executable string, args, environm
 		}
 		mu.Lock()
 		request := e2eRequest{
-			host:          req.URL.Host,
-			path:          req.URL.Path,
-			rawQuery:      req.URL.RawQuery,
-			authorization: req.Header.Get("Authorization"),
-			body:          string(body),
+			host:               req.URL.Host,
+			path:               req.URL.Path,
+			rawQuery:           req.URL.RawQuery,
+			authorization:      req.Header.Get("Authorization"),
+			proxyAuthorization: req.Header.Get("Proxy-Authorization"),
+			body:               string(body),
 		}
 		requests = append(requests, request)
 		mu.Unlock()
-		return &http.Response{
-			StatusCode: http.StatusOK,
-			Header:     http.Header{"Content-Type": []string{contentType}},
-			Body:       io.NopCloser(strings.NewReader(respond(request))),
-			Request:    req,
-		}, nil
+		response := respond(request)
+		response.Request = req
+		return response, nil
 	})
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	proxy := newProxy(testConfig(), ca, upstream, logger)
